@@ -68,7 +68,7 @@ public:
 
     std::size_t region_count() const noexcept { return region_count_; }
 
-    Observation observe() noexcept {
+    Observation observe() const noexcept {
         buffer_ = ObservationBuffer{};
         buffer_.region_count = static_cast<std::uint32_t>(region_count_);
 
@@ -120,12 +120,12 @@ private:
         std::size_t size;
     };
 
-    platform::ImageFile image_;
+    mutable platform::ImageFile image_;
     std::size_t region_count_ = 0;
     std::size_t region_sections_[MAX_REGIONS]{};
     ManualRegion manual_regions_[MAX_REGIONS]{};
     std::uint8_t synthetic_[MAX_REGIONS]{};
-    ObservationBuffer buffer_{};
+    mutable ObservationBuffer buffer_{};
 };
 
 static_assert(ProviderLike<CodeIntegrity>);

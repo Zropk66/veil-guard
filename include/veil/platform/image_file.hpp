@@ -151,7 +151,7 @@ public:
         }
 
         ctx.final(out);
-        detail::secure_wipe(buffer, sizeof(buffer));
+        veil::detail::secure_wipe(buffer, sizeof(buffer));
         return true;
     }
 
