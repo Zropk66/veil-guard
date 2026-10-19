@@ -116,5 +116,115 @@ int main() {
                      "null evidence is rejected");
     }
 
+    // 布局 2：含代码完整性观测
+    {
+        std::uint8_t buffer[1024];
+        std::size_t written = 0;
+        std::size_t failures = 0;
+
+        test::expect(veil_capture_integrity_evidence(buffer, sizeof(buffer),
+                                                      &written, &failures),
+                     "captures the integrity evidence");
+        test::expect(written == INTEGRITY_EVIDENCE_SIZE,
+                     "integrity evidence covers the registered layout");
+        test::expect(written == 328, "integrity evidence is 328 bytes");
+
+        // 正常环境下磁盘与内存摘要一致，差值槽位全零。区域计数非零
+        // 是布局描述，不是判定值。
+        bool deltas_zero = true;
+        for (std::size_t i = sizeof(std::uint32_t) + 68; i < written; ++i)
+            if (buffer[i] != 0)
+                deltas_zero = false;
+        test::expect(deltas_zero,
+                     "untampered code integrity deltas are zero");
+
+        // 重复采集必须稳定
+        std::uint8_t again[1024];
+        std::size_t written_again = 0;
+        veil_capture_integrity_evidence(again, sizeof(again), &written_again,
+                                        nullptr);
+        test::expect(written_again == written,
+                     "integrity evidence size is stable");
+        test::expect(detail::constant_time_compare(buffer, again, written) == 1,
+                     "integrity evidence is stable across captures");
+    }
+
+    // 布局 2 的输入校验
+    {
+        std::uint8_t buffer[1024];
+        std::size_t written = 0;
+        test::expect(!veil_capture_integrity_evidence(nullptr, sizeof(buffer),
+                                                       &written, nullptr),
+                     "integrity capture rejects a null output");
+        test::expect(!veil_capture_integrity_evidence(buffer, sizeof(buffer),
+                                                       nullptr, nullptr),
+                     "integrity capture rejects a null size output");
+        test::expect(!veil_capture_integrity_evidence(buffer, 16, &written,
+                                                       nullptr),
+                     "integrity capture rejects insufficient capacity");
+    }
+
+    // 两套布局必须派生出不同密钥
+    {
+        std::uint8_t standard[1024];
+        std::size_t standard_len = 0;
+        std::uint8_t integrity[1024];
+        std::size_t integrity_len = 0;
+
+        veil_capture_standard_evidence(standard, sizeof(standard), &standard_len);
+        veil_capture_integrity_evidence(integrity, sizeof(integrity),
+                                        &integrity_len, nullptr);
+
+        std::uint8_t key_standard[32];
+        std::uint8_t key_integrity[32];
+        veil_derive_session_key(card_key, sizeof(card_key) - 1, nonce,
+                                sizeof(nonce), standard, standard_len, 0x01,
+                                key_standard, sizeof(key_standard));
+        veil_derive_session_key(card_key, sizeof(card_key) - 1, nonce,
+                                sizeof(nonce), integrity, integrity_len, 0x01,
+                                key_integrity, sizeof(key_integrity));
+
+        test::expect(detail::constant_time_compare(key_standard, key_integrity,
+                                                   32) == 0,
+                     "the two layouts derive different keys");
+    }
+
+    // 布局 2 的直接派生入口
+    {
+        std::uint8_t key_a[32];
+        std::uint8_t key_b[32];
+        test::expect(veil_derive_with_integrity(card_key, sizeof(card_key) - 1,
+                                                 nonce, sizeof(nonce), 0x01,
+                                                 key_a, sizeof(key_a)),
+                     "derives with integrity evidence");
+        test::expect(veil_derive_with_integrity(card_key, sizeof(card_key) - 1,
+                                                 nonce, sizeof(nonce), 0x01,
+                                                 key_b, sizeof(key_b)),
+                     "repeats the integrity derivation");
+        test::expect(detail::constant_time_compare(key_a, key_b, 32) == 1,
+                     "integrity derivation is reproducible");
+
+        // 与标准布局的派生结果必须不同
+        std::uint8_t standard_key[32];
+        veil_derive_from_environment(card_key, sizeof(card_key) - 1, nonce,
+                                     sizeof(nonce), 0x01, standard_key,
+                                     sizeof(standard_key));
+        test::expect(detail::constant_time_compare(key_a, standard_key, 32) == 0,
+                     "integrity derivation differs from the standard one");
+
+        test::expect(!veil_derive_with_integrity(nullptr, 0, nonce,
+                                                  sizeof(nonce), 0x01, key_a,
+                                                  sizeof(key_a)),
+                     "integrity derivation rejects a null key");
+        test::expect(!veil_derive_with_integrity(card_key, sizeof(card_key) - 1,
+                                                  nonce, sizeof(nonce), 0x01,
+                                                  nullptr, 32),
+                     "integrity derivation rejects a null output");
+        test::expect(!veil_derive_with_integrity(card_key, sizeof(card_key) - 1,
+                                                  nonce, sizeof(nonce), 0x01,
+                                                  key_a, 8),
+                     "integrity derivation rejects an undersized output");
+    }
+
     return test::finish("static_api");
 }

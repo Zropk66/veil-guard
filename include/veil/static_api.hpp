@@ -37,4 +37,25 @@ bool veil_derive_from_environment(const void* card_key,
                                   std::uint8_t domain, std::uint8_t* out,
                                   std::size_t out_len) noexcept;
 
+// 采集含代码完整性观测的证据，对应服务端登记表里的布局 2。
+//
+// 与标准布局的区别是多出 260 字节的磁盘-内存摘要差值，正常环境下
+// 全零，因此服务端仍用零基线复现，不需要登记每版哈希。
+//
+// 不可在 DllMain 中调用：采集会打开自身映像文件，而加载器锁在模块
+// 初始化期间被持有，此时做文件操作会死锁。推迟到首次派生时机。
+//
+// failures 返回本次采集中摘要失败的区域数。非零不构成拒绝理由——
+// 失败区域的槽位保持零，与未篡改环境的观测相同。可用于记录，但不应
+// 据此做授权判定。
+bool veil_capture_integrity_evidence(std::uint8_t* out, std::size_t capacity,
+                                     std::size_t* written,
+                                     std::size_t* failures) noexcept;
+
+// 以布局 2 采集并直接派生。参数与服务端登记表里的布局 2 对应。
+bool veil_derive_with_integrity(const void* card_key, std::size_t card_key_len,
+                                const void* nonce, std::size_t nonce_len,
+                                std::uint8_t domain, std::uint8_t* out,
+                                std::size_t out_len) noexcept;
+
 }  // extern "C"

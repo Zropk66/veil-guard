@@ -114,4 +114,78 @@ extern "C" bool veil_derive_from_environment(const void* card_key,
     return derived;
 }
 
+// 采集含代码完整性观测的证据，对应服务端登记表里的布局 2。
+//
+// 与标准布局的区别是多出 260 字节的磁盘-内存摘要差值。正常环境下这些
+// 差值为零，因此服务端仍用零基线复现，不需要登记每版哈希。
+//
+// 调用前提：不可在 DllMain 中调用。register_module_sections 会打开自身
+// 映像文件，而加载器锁在模块初始化期间被持有，此时做文件操作会死锁。
+// 推迟到首次派生的时机，与 Guard 的约定一致。
+//
+// failures 返回本次采集中摘要失败的区域数。非零不构成拒绝理由——失败
+// 的区域槽位保持零，与未篡改环境的观测相同。调用方可以据此记录，但
+// 不应以此做授权判定。
+extern "C" bool veil_capture_integrity_evidence(std::uint8_t* out,
+                                                std::size_t capacity,
+                                                std::size_t* written,
+                                                std::size_t* failures) noexcept {
+    if (out == nullptr || written == nullptr)
+        return false;
+
+    if (capacity < IntegrityLayout::SIZE)
+        return false;
+
+    providers::CodeIntegrity integrity_probe;
+
+    if (failures != nullptr)
+        *failures = 0;
+
+    // 磁盘映像不可读时不应中断采集。摘要失败的槽位保持零，与正常环境
+    // 无法区分，因此采集本身仍然成功——这正是「不提供判定点」的要求。
+    const bool registered = integrity_probe.register_module_sections();
+    if (!registered && failures != nullptr) {
+        // 未登记任何区域意味着差值槽位全零，布局仍然完整
+        *failures = 1;
+    }
+
+    const providers::AntiDebugSnapshot debug_probe;
+    const providers::ModuleTopology topo_probe;
+    const providers::CertificatePin pin_probe;
+
+    if (!IntegrityLayout::serialize(out, capacity, debug_probe, topo_probe,
+                                    pin_probe, integrity_probe))
+        return false;
+
+    *written = IntegrityLayout::SIZE;
+    return true;
+}
+
+// 以布局 2 采集并直接派生。参数与服务端登记表里的布局 2 对应。
+extern "C" bool veil_derive_with_integrity(const void* card_key,
+                                           std::size_t card_key_len,
+                                           const void* nonce,
+                                           std::size_t nonce_len,
+                                           std::uint8_t domain,
+                                           std::uint8_t* out,
+                                           std::size_t out_len) noexcept {
+    if (out == nullptr || out_len < evidence::Binder::KEY_SIZE)
+        return false;
+
+    std::uint8_t evidence_buffer[INTEGRITY_EVIDENCE_SIZE];
+    std::size_t written = 0;
+
+    const bool captured = veil_capture_integrity_evidence(
+        evidence_buffer, sizeof(evidence_buffer), &written, nullptr);
+
+    bool derived = false;
+    if (captured)
+        derived = evidence::Binder::derive(card_key, card_key_len, nonce,
+                                           nonce_len, evidence_buffer, written,
+                                           domain, out);
+
+    detail::secure_wipe(evidence_buffer, sizeof(evidence_buffer));
+    return derived;
+}
+
 }  // namespace veil
