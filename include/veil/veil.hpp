@@ -17,6 +17,7 @@
 #include "platform/memory.hpp"
 #include "platform/image_file.hpp"
 #include "platform/image_map.hpp"
+#include "platform/hwid.hpp"
 #include "platform/decode.hpp"
 #include "platform/remap.hpp"
 #include "platform/scan.hpp"

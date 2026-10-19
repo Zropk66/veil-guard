@@ -69,7 +69,7 @@ target_compile_definitions(veil_header_only INTERFACE
     WIN32_LEAN_AND_MEAN
     VEIL_HEADER_ONLY=1
 )
-target_link_libraries(veil_header_only INTERFACE veil_monocypher ws2_32 secur32 crypt32)
+target_link_libraries(veil_header_only INTERFACE veil_monocypher ws2_32 secur32 crypt32 advapi32)
 if(MSVC)
     # /utf-8 必需：源文件以 UTF-8 保存并含中文注释，缺省代码页会让
     # 编译器在解析注释后的代码时错位
@@ -95,7 +95,7 @@ if(VEIL_BUILD_STATIC)
         _CRT_SECURE_NO_WARNINGS
         NOMINMAX
         WIN32_LEAN_AND_MEAN)
-    target_link_libraries(veil_static PUBLIC veil_monocypher ws2_32 secur32 crypt32)
+    target_link_libraries(veil_static PUBLIC veil_monocypher ws2_32 secur32 crypt32 advapi32)
     if(MSVC)
         target_compile_options(veil_static PUBLIC
             /W4 /permissive- /Zc:__cplusplus /utf-8)
@@ -113,7 +113,7 @@ set(VEIL_TEST_TARGETS
     layout_test binder_test zero_baseline_test
     guard_test tls_client_test tls_live_test spki_test umbrella_test
     json_scan_test json_vectors_test signed_envelope_test veil_vectors_test
-    veil_envelope_test evidence_contract_test)
+    veil_envelope_test evidence_contract_test hwid_test http_test)
 
 if(VEIL_BUILD_TESTS)
     enable_testing()
