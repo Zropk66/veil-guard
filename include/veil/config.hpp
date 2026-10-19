@@ -33,4 +33,11 @@ inline constexpr std::size_t MAX_OBSERVATION_SLOTS = 8;
 // Binder 的 info 缓冲因此取该值加一，hkdf 的截断阈值必须再高出一档。
 inline constexpr std::size_t MAX_EVIDENCE_BYTES = 1024;
 
+// 标准证据布局的长度，对外契约。
+//
+// 服务端按同一长度用零基线构造 info。客户端改动 provider 组合后服务端
+// 必须同步，否则全部客户端派生分叉。该值由 guard_impl.cpp 的静态断言
+// 与标准布局锁定。
+inline constexpr std::size_t STANDARD_EVIDENCE_SIZE = 68;
+
 }  // namespace veil

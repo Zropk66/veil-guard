@@ -6,6 +6,18 @@
 
 namespace veil {
 
+// 标准证据布局：AntiDebugSnapshot 16 + ModuleTopology 20 + CertificatePin 32。
+//
+// 这个长度是对外契约。服务端用零基线按同一长度构造 info，因此客户端
+// 改动 provider 顺序或增删 provider 后，服务端必须同步，否则全部客户端
+// 派生分叉。静态断言在编译期锁定，避免改动后静默失配。
+using StandardLayout = evidence::Layout<providers::AntiDebugSnapshot,
+                                        providers::ModuleTopology,
+                                        providers::CertificatePin>;
+
+static_assert(StandardLayout::SIZE == STANDARD_EVIDENCE_SIZE,
+              "the standard evidence layout changed; the server must be updated");
+
 // 静态库形态的实现单元。
 //
 // 与 header-only 的区别不在行为，而在可见性：这些实现体编译进库后
@@ -26,21 +38,18 @@ extern "C" bool veil_capture_standard_evidence(std::uint8_t* out,
     if (out == nullptr || written == nullptr)
         return false;
 
-    using Layout = evidence::Layout<providers::AntiDebugSnapshot,
-                                    providers::ModuleTopology,
-                                    providers::CertificatePin>;
-
-    if (capacity < Layout::SIZE)
+    if (capacity < StandardLayout::SIZE)
         return false;
 
     const providers::AntiDebugSnapshot debug_probe;
     const providers::ModuleTopology topo_probe;
     const providers::CertificatePin pin_probe;
 
-    if (!Layout::serialize(out, capacity, debug_probe, topo_probe, pin_probe))
+    if (!StandardLayout::serialize(out, capacity, debug_probe, topo_probe,
+                                   pin_probe))
         return false;
 
-    *written = Layout::SIZE;
+    *written = StandardLayout::SIZE;
     return true;
 }
 
