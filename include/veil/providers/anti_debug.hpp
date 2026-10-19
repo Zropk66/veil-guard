@@ -20,13 +20,13 @@ namespace veil::providers {
 //
 // 没有可比对的布尔量，也就没有可单点改写的跳转。
 struct AntiDebugSnapshot {
-    std::uint8_t being_debugged;
-    std::uint8_t hardware_breakpoints;
-    std::uint8_t reserved0;
-    std::uint8_t reserved1;
-    std::uint32_t nt_global_flag;
-    std::uint32_t veh_foreign_handlers;
-    std::uint32_t page_guard_events;
+    std::uint8_t being_debugged{};
+    std::uint8_t hardware_breakpoints{};
+    std::uint8_t reserved0{};
+    std::uint8_t reserved1{};
+    std::uint32_t nt_global_flag{};
+    std::uint32_t veh_foreign_handlers{};
+    std::uint32_t page_guard_events{};
 
     static constexpr std::size_t OBSERVATION_SIZE = 16;
 

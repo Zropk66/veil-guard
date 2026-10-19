@@ -8,9 +8,10 @@
 
 namespace veil {
 
-// info 超过该长度即截断。该常量是 RFC 5869 之外的自定界限，
-// 用于固定 expand 阶段的栈上缓冲，不作为安全边界使用。
-inline constexpr std::size_t HKDF_MAX_INFO = 1024;
+// info 超过该长度即截断。截断会静默丢弃尾部字节，因此调用方必须保证
+// 参与派生的全部区分字段都落在该界限内。界限由 config 的证据上限推导，
+// Binder 以静态断言锁定该前提。
+inline constexpr std::size_t HKDF_MAX_INFO = 4096;
 
 // RFC 5869。expand 阶段必须以 PRK 作为 HMAC 密钥，退回裸 SHA256
 // 会让不同盐派生出相同的密钥流。
