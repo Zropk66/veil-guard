@@ -56,7 +56,9 @@ add_library(veil_header_only INTERFACE)
 add_library(veil::header_only ALIAS veil_header_only)
 target_include_directories(veil_header_only INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # 汇编单元以对象文件形式并入每个消费者，避免把 C++ 专用选项传给汇编器
-target_sources(veil_header_only INTERFACE $<TARGET_OBJECTS:veil_syscall>)
+target_sources(veil_header_only INTERFACE
+    $<TARGET_OBJECTS:veil_syscall>
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/probe_pin.cpp)
 target_compile_definitions(veil_header_only INTERFACE
     VEIL_BUILD_SEED=${VEIL_BUILD_SEED}
     _CRT_SECURE_NO_WARNINGS
@@ -81,7 +83,7 @@ set(VEIL_TEST_TARGETS
     syscall_test peb_test image_file_test scan_test
     anti_debug_test code_integrity_test module_topo_test
     layout_test binder_test zero_baseline_test envelope_test vectors_test
-    guard_test)
+    guard_test tls_client_test tls_live_test spki_test)
 
 if(VEIL_BUILD_TESTS)
     enable_testing()
