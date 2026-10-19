@@ -29,6 +29,7 @@
 #include "evidence/binder.hpp"
 #include "license/payload.hpp"
 #include "license/envelope.hpp"
+#include "license/signed_envelope.hpp"
 #include "guard.hpp"
 
 // transport 不在本入口内。它引入 security.h 并要求先定义

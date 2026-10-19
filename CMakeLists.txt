@@ -112,7 +112,7 @@ set(VEIL_TEST_TARGETS
     anti_debug_test code_integrity_test module_topo_test
     layout_test binder_test zero_baseline_test envelope_test vectors_test
     guard_test tls_client_test tls_live_test spki_test umbrella_test
-    json_scan_test json_vectors_test)
+    json_scan_test json_vectors_test signed_envelope_test)
 
 if(VEIL_BUILD_TESTS)
     enable_testing()
