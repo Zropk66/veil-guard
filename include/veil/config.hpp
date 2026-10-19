@@ -40,4 +40,17 @@ inline constexpr std::size_t MAX_EVIDENCE_BYTES = 1024;
 // 与标准布局锁定。
 inline constexpr std::size_t STANDARD_EVIDENCE_SIZE = 68;
 
+// 含代码完整性 provider 的布局长度。
+//
+// 服务端登记表里对应布局 2。客户端启用这套布局时必须在请求中声明
+// 布局标识，否则服务端按默认布局派生，两侧密钥不同。
+inline constexpr std::size_t INTEGRITY_EVIDENCE_SIZE = 328;
+
+// 布局标识。与服务端 EVIDENCE_LAYOUTS 的键一一对应。
+//
+// 客户端通过请求字段 evidenceLayout 声明，服务端据此选择零基线长度。
+// 未登记的标识会被拒绝。
+inline constexpr const char* EVIDENCE_LAYOUT_STANDARD = "1";
+inline constexpr const char* EVIDENCE_LAYOUT_INTEGRITY = "2";
+
 }  // namespace veil

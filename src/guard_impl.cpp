@@ -2,6 +2,7 @@
 #include "veil/evidence/layout.hpp"
 #include "veil/providers/anti_debug.hpp"
 #include "veil/providers/cert_pin.hpp"
+#include "veil/providers/code_integrity.hpp"
 #include "veil/providers/module_topo.hpp"
 
 namespace veil {
@@ -17,6 +18,18 @@ using StandardLayout = evidence::Layout<providers::AntiDebugSnapshot,
 
 static_assert(StandardLayout::SIZE == STANDARD_EVIDENCE_SIZE,
               "the standard evidence layout changed; the server must be updated");
+
+// 含代码完整性 provider 的布局。服务端登记为布局 2。
+//
+// CodeIntegrity 带实例状态，需在采集前完成区域登记，因此它的布局
+// 由调用方自行装配，不在此处固定。这里只锁定长度契约。
+using IntegrityLayout = evidence::Layout<providers::AntiDebugSnapshot,
+                                         providers::ModuleTopology,
+                                         providers::CertificatePin,
+                                         providers::CodeIntegrity>;
+
+static_assert(IntegrityLayout::SIZE == INTEGRITY_EVIDENCE_SIZE,
+              "the integrity layout changed; the server registry must be updated");
 
 // 静态库形态的实现单元。
 //
