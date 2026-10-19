@@ -58,23 +58,151 @@ public:
     // 对端证书公钥指纹的实测值。未完成握手时为零值。
     const std::uint8_t* peer_digest() const noexcept { return peer_digest_; }
 
+    // 发送应用数据。返回 false 表示未连接、参数非法或对端已关闭。
+    //
+    // 单条 TLS 记录的上限由 Schannel 在握手后给出，超出部分自动分片。
+    // 分片对调用方透明：一次调用可以跨越任意条记录。
+    bool send(const void* data, std::size_t size) noexcept {
+        if (!handshake_done_ || data == nullptr || size == 0)
+            return false;
+
+        const auto* bytes = static_cast<const std::uint8_t*>(data);
+        while (size > 0) {
+            const std::size_t chunk =
+                size < max_message_ ? size : max_message_;
+
+            // 记录布局为 header ‖ data ‖ trailer，三段连成一块连续内存
+            if (header_size_ + chunk + trailer_size_ > MAX_RECORD * 2)
+                return false;
+
+            std::uint8_t record[MAX_RECORD * 2];
+            for (std::size_t i = 0; i < chunk; ++i)
+                record[header_size_ + i] = bytes[i];
+
+            SecBuffer buffers[4]{};
+            buffers[0].BufferType = SECBUFFER_STREAM_HEADER;
+            buffers[0].pvBuffer = record;
+            buffers[0].cbBuffer = static_cast<unsigned long>(header_size_);
+            buffers[1].BufferType = SECBUFFER_DATA;
+            buffers[1].pvBuffer = record + header_size_;
+            buffers[1].cbBuffer = static_cast<unsigned long>(chunk);
+            buffers[2].BufferType = SECBUFFER_STREAM_TRAILER;
+            buffers[2].pvBuffer = record + header_size_ + chunk;
+            buffers[2].cbBuffer = static_cast<unsigned long>(trailer_size_);
+            buffers[3].BufferType = SECBUFFER_EMPTY;
+
+            SecBufferDesc desc{};
+            desc.ulVersion = SECBUFFER_VERSION;
+            desc.cBuffers = 4;
+            desc.pBuffers = buffers;
+
+            if (EncryptMessage(&context_, 0, &desc, 0) != SEC_E_OK)
+                return false;
+
+            const std::size_t total = buffers[0].cbBuffer +
+                                      buffers[1].cbBuffer +
+                                      buffers[2].cbBuffer;
+            if (!send_raw(record, total))
+                return false;
+
+            bytes += chunk;
+            size -= chunk;
+        }
+        return true;
+    }
+
+    // 接收指定字节数的应用数据。
+    //
+    // 一条 TLS 记录可能只含部分所需字节，一次读取也可能带来多条记录
+    // 的明文。因此跨调用的剩余明文必须由实例持有，不能用线程级静态
+    // 缓冲——同一线程上的两个客户端会互相覆盖对方的残留数据。
+    bool recv(void* buffer, std::size_t size) noexcept {
+        if (!handshake_done_ || buffer == nullptr || size == 0)
+            return false;
+
+        auto* out = static_cast<std::uint8_t*>(buffer);
+        std::size_t filled = 0;
+
+        while (filled < size) {
+            if (pending_offset_ < pending_length_) {
+                const std::size_t available = pending_length_ - pending_offset_;
+                const std::size_t take = (size - filled < available)
+                                             ? (size - filled)
+                                             : available;
+                for (std::size_t i = 0; i < take; ++i)
+                    out[filled + i] = pending_[pending_offset_ + i];
+                pending_offset_ += take;
+                filled += take;
+                continue;
+            }
+
+            pending_length_ = 0;
+            pending_offset_ = 0;
+
+            std::uint8_t record[MAX_RECORD * 2];
+
+            // TLS 记录头固定五字节：类型、版本两字节、长度两字节
+            if (!recv_raw(record, 5))
+                return false;
+
+            const std::size_t payload =
+                (static_cast<std::size_t>(record[3]) << 8) | record[4];
+            if (payload == 0 || payload + 5 > sizeof(record))
+                return false;
+
+            if (!recv_raw(record + 5, payload))
+                return false;
+
+            SecBuffer buffers[4]{};
+            buffers[0].BufferType = SECBUFFER_DATA;
+            buffers[0].pvBuffer = record;
+            buffers[0].cbBuffer = static_cast<unsigned long>(payload + 5);
+            buffers[1].BufferType = SECBUFFER_EMPTY;
+            buffers[2].BufferType = SECBUFFER_EMPTY;
+            buffers[3].BufferType = SECBUFFER_EMPTY;
+
+            SecBufferDesc desc{};
+            desc.ulVersion = SECBUFFER_VERSION;
+            desc.cBuffers = 4;
+            desc.pBuffers = buffers;
+
+            const SECURITY_STATUS status =
+                DecryptMessage(&context_, &desc, 0, nullptr);
+
+            // 会话结束与重新协商都不是业务数据，直接拒绝
+            if (status != SEC_E_OK)
+                return false;
+
+            for (std::size_t i = 0; i < 4; ++i) {
+                if (buffers[i].BufferType != SECBUFFER_DATA ||
+                    buffers[i].cbBuffer == 0)
+                    continue;
+
+                const std::size_t length = buffers[i].cbBuffer;
+                if (length > sizeof(pending_))
+                    return false;
+
+                const auto* source =
+                    static_cast<const std::uint8_t*>(buffers[i].pvBuffer);
+                for (std::size_t k = 0; k < length; ++k)
+                    pending_[k] = source[k];
+                pending_length_ = length;
+                pending_offset_ = 0;
+            }
+        }
+
+        return true;
+    }
+
+    // 已解密但尚未被调用方取走的字节数。
+    std::size_t pending_bytes() const noexcept {
+        return pending_length_ - pending_offset_;
+    }
+
     void close() noexcept {
         if (context_valid_) {
-            if (handshake_done_) {
-                SecBuffer shutdown{};
-                shutdown.BufferType = SECBUFFER_TOKEN;
-                shutdown.cbBuffer = 0;
-                shutdown.pvBuffer = nullptr;
-
-                SecBufferDesc shutdown_desc{};
-                shutdown_desc.ulVersion = SECBUFFER_VERSION;
-                shutdown_desc.cBuffers = 1;
-                shutdown_desc.pBuffers = &shutdown;
-
-                DWORD shutdown_flags = 0;
-                ApplyControlToken(&context_, &shutdown_desc);
-                (void)shutdown_flags;
-            }
+            if (handshake_done_)
+                send_close_notify();
             DeleteSecurityContext(&context_);
             context_valid_ = false;
         }
@@ -91,10 +219,98 @@ public:
             wsa_started_ = false;
         }
         handshake_done_ = false;
+        pending_length_ = 0;
+        pending_offset_ = 0;
+        header_size_ = 0;
+        trailer_size_ = 0;
+        max_message_ = 0;
         veil::detail::secure_wipe(peer_digest_, sizeof(peer_digest_));
     }
 
 private:
+    // 发送 TLS 关闭告警。
+    //
+    // 不发这一步时对端看到的是连接被直接断开，而非有序关闭。某些
+    // 服务端与中间设备会把这种情况记为异常，重连策略也会不同。
+    void send_close_notify() noexcept {
+        SecBuffer shutdown{};
+        shutdown.BufferType = SECBUFFER_TOKEN;
+        shutdown.cbBuffer = 0;
+        shutdown.pvBuffer = nullptr;
+
+        SecBufferDesc desc{};
+        desc.ulVersion = SECBUFFER_VERSION;
+        desc.cBuffers = 1;
+        desc.pBuffers = &shutdown;
+
+        if (ApplyControlToken(&context_, &desc) != SEC_E_OK)
+            return;
+
+        SecBuffer out{};
+        out.BufferType = SECBUFFER_TOKEN;
+        out.cbBuffer = 0;
+        out.pvBuffer = nullptr;
+
+        SecBufferDesc out_desc{};
+        out_desc.ulVersion = SECBUFFER_VERSION;
+        out_desc.cBuffers = 1;
+        out_desc.pBuffers = &out;
+
+        DWORD flags = 0;
+        TimeStamp expiry{};
+        if (InitializeSecurityContextA(&credentials_, &context_, nullptr, 0, 0,
+                                       SECURITY_NATIVE_DREP, nullptr, 0,
+                                       nullptr, &out_desc, &flags,
+                                       &expiry) != SEC_E_OK)
+            return;
+
+        if (out.cbBuffer > 0 && out.pvBuffer != nullptr) {
+            send_raw(out.pvBuffer, out.cbBuffer);
+            FreeContextBuffer(out.pvBuffer);
+        }
+    }
+
+    // 查询 Schannel 给出的记录布局参数。三段尺寸由安全包决定，
+    // 硬编码会在换加密套件时失配。
+    bool query_stream_sizes() noexcept {
+        SecPkgContext_StreamSizes sizes{};
+        if (QueryContextAttributesA(&context_, SECPKG_ATTR_STREAM_SIZES,
+                                    &sizes) != SEC_E_OK)
+            return false;
+
+        header_size_ = sizes.cbHeader;
+        trailer_size_ = sizes.cbTrailer;
+        max_message_ = sizes.cbMaximumMessage;
+
+        return header_size_ > 0 && max_message_ > 0;
+    }
+
+    bool send_raw(const void* data, std::size_t size) noexcept {
+        const auto* bytes = static_cast<const char*>(data);
+        std::size_t sent = 0;
+        while (sent < size) {
+            const int written = ::send(socket_, bytes + sent,
+                                       static_cast<int>(size - sent), 0);
+            if (written <= 0)
+                return false;
+            sent += static_cast<std::size_t>(written);
+        }
+        return true;
+    }
+
+    bool recv_raw(void* data, std::size_t size) noexcept {
+        auto* bytes = static_cast<char*>(data);
+        std::size_t received = 0;
+        while (received < size) {
+            const int read = ::recv(socket_, bytes + received,
+                                    static_cast<int>(size - received), 0);
+            if (read <= 0)
+                return false;
+            received += static_cast<std::size_t>(read);
+        }
+        return true;
+    }
+
     bool open_socket(const char* host, std::uint16_t port) noexcept {
         WSADATA wsa{};
         if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
@@ -229,6 +445,9 @@ private:
         if (!handshake_done_)
             return false;
 
+        if (!query_stream_sizes())
+            return false;
+
         return inspect_peer_certificate(pin);
     }
 
@@ -262,9 +481,9 @@ private:
         if (*size >= MAX_RECORD)
             return false;
 
-        const int received = recv(socket_,
-                                  reinterpret_cast<char*>(buffer + *size),
-                                  static_cast<int>(MAX_RECORD - *size), 0);
+        const int received = ::recv(socket_,
+                                    reinterpret_cast<char*>(buffer + *size),
+                                    static_cast<int>(MAX_RECORD - *size), 0);
         if (received <= 0)
             return false;
 
@@ -273,16 +492,7 @@ private:
     }
 
     bool send_all(const void* data, std::size_t size) noexcept {
-        const auto* bytes = static_cast<const char*>(data);
-        std::size_t sent = 0;
-        while (sent < size) {
-            const int written = send(socket_, bytes + sent,
-                                     static_cast<int>(size - sent), 0);
-            if (written <= 0)
-                return false;
-            sent += static_cast<std::size_t>(written);
-        }
-        return true;
+        return send_raw(data, size);
     }
 
     // 取对端证书的 SubjectPublicKeyInfo 摘要，并按 pin 判定是否继续。
@@ -318,6 +528,16 @@ private:
     bool handshake_done_ = false;
     bool wsa_started_ = false;
     std::uint8_t peer_digest_[CertPin::DIGEST_SIZE]{};
+
+    std::size_t header_size_ = 0;
+    std::size_t trailer_size_ = 0;
+    std::size_t max_message_ = 0;
+
+    // 跨调用的已解密明文。置于实例内而非线程静态，避免同一线程上的
+    // 两个客户端互相覆盖残留数据。
+    std::uint8_t pending_[MAX_RECORD * 2]{};
+    std::size_t pending_length_ = 0;
+    std::size_t pending_offset_ = 0;
 };
 
 }  // namespace veil::transport

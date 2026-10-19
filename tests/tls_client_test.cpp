@@ -72,5 +72,37 @@ int main() {
                      "probe fails against a closed port");
     }
 
+    // 应用数据收发的前置条件：未握手时必须拒绝而不是静默返回
+    {
+        TlsClient client;
+        std::uint8_t buffer[64];
+
+        test::expect(!client.send(buffer, sizeof(buffer)),
+                     "send before handshake is rejected");
+        test::expect(!client.recv(buffer, sizeof(buffer)),
+                     "recv before handshake is rejected");
+        test::expect(!client.send(nullptr, 16),
+                     "send with a null buffer is rejected");
+        test::expect(!client.recv(nullptr, 16),
+                     "recv with a null buffer is rejected");
+        test::expect(!client.send(buffer, 0), "zero length send is rejected");
+        test::expect(!client.recv(buffer, 0), "zero length recv is rejected");
+        test::expect(client.pending_bytes() == 0,
+                     "fresh client has no pending plaintext");
+    }
+
+    // 握手失败后收发同样不可用
+    {
+        TlsClient client;
+        client.connect_to("127.0.0.1", 1, CertPin{});
+        std::uint8_t buffer[16];
+        test::expect(!client.send(buffer, sizeof(buffer)),
+                     "send after a failed handshake is rejected");
+        test::expect(!client.recv(buffer, sizeof(buffer)),
+                     "recv after a failed handshake is rejected");
+        test::expect(client.pending_bytes() == 0,
+                     "failed handshake leaves no pending plaintext");
+    }
+
     return test::finish("tls_client");
 }
