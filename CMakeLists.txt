@@ -52,6 +52,9 @@ if(NOT MSVC)
     set_source_files_properties(${VEIL_SYSCALL_STUB} PROPERTIES LANGUAGE ASM)
 endif()
 
+option(VEIL_HEADER_ONLY "Deliver veil as a header-only interface target" ON)
+option(VEIL_BUILD_STATIC "Build the optional PIMPL static library target" OFF)
+
 add_library(veil_header_only INTERFACE)
 add_library(veil::header_only ALIAS veil_header_only)
 target_include_directories(veil_header_only INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -64,6 +67,7 @@ target_compile_definitions(veil_header_only INTERFACE
     _CRT_SECURE_NO_WARNINGS
     NOMINMAX
     WIN32_LEAN_AND_MEAN
+    VEIL_HEADER_ONLY=1
 )
 target_link_libraries(veil_header_only INTERFACE veil_monocypher ws2_32 secur32 crypt32)
 if(MSVC)
@@ -76,11 +80,34 @@ else()
     target_compile_options(veil_header_only INTERFACE -Wall -Wextra -mrdrnd)
 endif()
 
+# 可选静态库形态。与 header-only 共用同一套源文件，区别只在于
+# 重实现单元被编译进库而不是在消费方内联展开，因此消费方看不到
+# 这些符号的实现体，也无法在自身翻译单元里改写它们。
+if(VEIL_BUILD_STATIC)
+    add_library(veil_static STATIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/probe_pin.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/guard_impl.cpp)
+    add_library(veil::static ALIAS veil_static)
+    target_include_directories(veil_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_definitions(veil_static PUBLIC
+        VEIL_BUILD_SEED=${VEIL_BUILD_SEED}
+        _CRT_SECURE_NO_WARNINGS
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN)
+    target_link_libraries(veil_static PUBLIC veil_monocypher ws2_32 secur32 crypt32)
+    if(MSVC)
+        target_compile_options(veil_static PUBLIC
+            /W4 /permissive- /Zc:__cplusplus /utf-8)
+    else()
+        target_compile_options(veil_static PUBLIC -Wall -Wextra -mrdrnd)
+    endif()
+endif()
+
 option(VEIL_BUILD_TESTS "Build veil tests" OFF)
 
 set(VEIL_TEST_TARGETS
     sha256_test hmac_hkdf_test aes_test aes_gcm_test ed25519_test
-    syscall_test peb_test image_file_test scan_test
+    syscall_test peb_test image_file_test scan_test image_map_test remap_test
     anti_debug_test code_integrity_test module_topo_test
     layout_test binder_test zero_baseline_test envelope_test vectors_test
     guard_test tls_client_test tls_live_test spki_test)
