@@ -448,7 +448,15 @@ private:
         if (!query_stream_sizes())
             return false;
 
-        return inspect_peer_certificate(pin);
+        // 指纹不符时握手本身已经完成，但连接不得对外表现为可用。
+        // 不清掉状态会让调用方在 connect_to 失败后仍看到 connected()
+        // 为真，进而把数据发往一个已被判定的对端。
+        if (!inspect_peer_certificate(pin)) {
+            handshake_done_ = false;
+            return false;
+        }
+
+        return true;
     }
 
     // 把上一轮未消费的字节搬回缓冲区头部。

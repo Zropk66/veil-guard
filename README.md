@@ -33,11 +33,11 @@ header-only 形态：
 | 层 | 头文件 | 职责 |
 |---|---|---|
 | L0 | `crypto/sha256` `hmac` `hkdf` `aes` `aes_gcm` `ed25519` | 密码学基座，全部通过标准向量 |
-| L1 | `platform/syscall` `peb` `memory` `image_file` `image_map` `decode` `remap` `scan` | 直发系统调用、模块遍历、区间内省、PE 解析、指令解码、代码重映射 |
+| L1 | `platform/syscall` `peb` `memory` `image_file` `image_map` `decode` `remap` `scan` `hwid` | 直发系统调用、模块遍历、区间内省、PE 解析、指令解码、代码重映射、机器标识 |
 | L2 | `providers/anti_debug` `code_integrity` `module_topo` `cert_pin` `entropy` | 观测采集，正常环境全部为零 |
 | L3 | `evidence/layout` `binder` | 编译期布局序列化与唯一的派生入口 |
 | L4 | `license/payload` `signed_envelope` | 可选授权层，时效折算并入功能位 |
-| — | `transport/tls_client` `cert_pin` | Schannel 客户端与证书公钥指纹锁定 |
+| — | `transport/tls_client` `cert_pin` `http` `license_client` | Schannel 客户端、证书公钥指纹锁定、HTTP/1.1 分帧与授权接口封装 |
 | — | `guard` `static_api` | 装配入口，两种交付形态各一 |
 
 入库的 provider 不都进默认布局。只有 `anti_debug` 与 `code_integrity` 的
@@ -53,6 +53,34 @@ header-only 形态：
 
 客户端在请求中声明 `evidenceLayout`，服务端按该标识取零基线长度。标识与
 长度任一处改动都必须两侧同时发布。
+
+## 对接服务端
+
+`transport/license_client` 把一次验证拆成可替换的三段：构造请求、收发、
+解析响应。没有内嵌重试、没有后台线程、没有全局状态。
+
+```cpp
+veil::transport::LicenseClient client;
+veil::transport::CertPin pin(server_spki_digest);
+if (!client.connect(host, 443, pin)) return;
+
+char nonce[32];
+guard.next_nonce(nonce, sizeof(nonce));
+
+char response[64 * 1024];
+veil::transport::LicenseClient::Response meta{};
+if (!client.exchange({host, "/api/license-verification/veil",
+                      body, body_length}, response, sizeof(response), &meta))
+    return;
+```
+
+响应中的信封字段用 `JsonScanner` 在原始文本上取区间，不解析成对象再重新
+序列化。服务端签名覆盖 `JSON.stringify` 的精确字节，重新编码会让键序与
+转义不一致，验签永久失败。
+
+机器标识由 `platform::MachineId` 采集：系统 MachineGuid、系统盘卷序列号、
+SMBIOS System UUID 三者拼接后取 SHA-256，输出 32 位十六进制。任一来源
+缺失时以零填充参与摘要，长度不变。
 
 ## 观测取代判定
 

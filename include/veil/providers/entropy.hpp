@@ -66,6 +66,30 @@ public:
         }
     }
 
+    // 生成 nonce 并写为十六进制串。容量需大于 2 * NONCE_SIZE。
+    //
+    // 服务端用同一个 nonce 复现派生，因此它必须是每次请求新生成的。
+    // 用系统 CSPRNG 也可，但那条路径依赖被改写的 rand 导出；这里的
+    // 四路物理熵不经过任何可挂钩的接口。
+    bool nonce_hex(char* out, std::size_t capacity) noexcept {
+        constexpr std::size_t HEX = NONCE_SIZE * 2;
+        if (out == nullptr || capacity <= HEX)
+            return false;
+
+        std::uint8_t raw[NONCE_SIZE];
+        generate(raw, sizeof(raw));
+
+        static constexpr char kHex[] = "0123456789abcdef";
+        for (std::size_t i = 0; i < NONCE_SIZE; ++i) {
+            out[i * 2] = kHex[raw[i] >> 4];
+            out[i * 2 + 1] = kHex[raw[i] & 0x0F];
+        }
+        out[HEX] = '\0';
+
+        detail::secure_wipe(raw, sizeof(raw));
+        return true;
+    }
+
     ~Entropy() noexcept {
         detail::secure_wipe(key_, KEY_SIZE);
         detail::secure_wipe(nonce_, NONCE_SIZE);

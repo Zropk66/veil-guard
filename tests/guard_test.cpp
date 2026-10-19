@@ -127,5 +127,35 @@ int main() {
                      "guard rejects null nonce");
     }
 
+    // 请求 nonce：每次必须不同，且是定长十六进制
+    {
+        Guard guard;
+        char first[32];
+        char second[32];
+
+        test::expect(guard.next_nonce(first, sizeof(first)),
+                     "guard generates a request nonce");
+        test::expect(guard.next_nonce(second, sizeof(second)),
+                     "guard generates a second request nonce");
+
+        test::expect(std::strlen(first) == 24, "nonce is 12 bytes in hex");
+        test::expect(std::strcmp(first, second) != 0,
+                     "successive nonces differ");
+
+        bool hex_only = true;
+        for (std::size_t i = 0; i < 24; ++i) {
+            const char c = first[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                hex_only = false;
+        }
+        test::expect(hex_only, "nonce is lowercase hexadecimal");
+
+        char tight[16];
+        test::expect(!guard.next_nonce(tight, sizeof(tight)),
+                     "nonce rejects an undersized buffer");
+        test::expect(!guard.next_nonce(nullptr, 32),
+                     "nonce rejects a null buffer");
+    }
+
     return test::finish("guard");
 }

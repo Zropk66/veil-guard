@@ -177,5 +177,32 @@ int main() {
                      "the last mapping is still callable");
     }
 
+    // RemappedCall 封装：按原签名调用，未映射时回落到原函数
+    {
+        using Fn = int (*)(int);
+        RemappedCall<Fn> callable;
+
+        test::expect(!callable.armed(), "a fresh callable is not armed");
+        test::expect(callable.entry() == nullptr,
+                     "an unarmed callable has no entry");
+
+        test::expect(callable.arm(module, &add_stamp),
+                     "arms the callable on a mapped copy");
+        test::expect(callable.armed(), "the callable reports armed");
+        test::expect(callable.entry() != &add_stamp,
+                     "the armed entry differs from the origin");
+        test::expect(callable.entry()(41) == add_stamp(41),
+                     "the armed callable matches the original result");
+
+        callable.release();
+        test::expect(!callable.armed(), "release disarms the callable");
+
+        // 映射失败时不得留下悬空入口
+        RemappedCall<Fn> broken;
+        test::expect(!broken.arm(nullptr, &add_stamp),
+                     "arming with a null module fails");
+        test::expect(!broken.armed(), "a failed arm leaves the callable unarmed");
+    }
+
     return test::finish("remap");
 }

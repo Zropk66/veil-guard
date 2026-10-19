@@ -601,3 +601,51 @@ private:
 };
 
 }  // namespace veil::platform
+
+namespace veil::platform {
+
+// 把函数映射到私有页后按原签名调用。//
+// RemappedCode 只负责复制与修正，调用约定由模板参数给出。这样同一个
+// 封装既能承载派生入口这类有返回值的函数，也能承载返回 void 的写入
+// 函数，不必为每种签名各写一遍。
+//
+// 映射成功前 entry() 返回 nullptr，因此调用方要先确认 armed()。未映射
+// 时直接用原函数指针是安全的：副本与原件行为一致，只是断点与补丁的
+// 落点不同。
+template <typename Fn>
+class RemappedCall {
+public:
+    RemappedCall() noexcept = default;
+    ~RemappedCall() noexcept { release(); }
+
+    RemappedCall(const RemappedCall&) = delete;
+    RemappedCall& operator=(const RemappedCall&) = delete;
+
+    // 映射 target 指向的函数。module 通常是本模块基址。
+    bool arm(const void* module, Fn target) noexcept {
+        origin_ = target;
+        const bool mapped = code_.map_function(
+            module, reinterpret_cast<const void*>(target));
+        if (mapped)
+            mapped_ = reinterpret_cast<Fn>(code_.entry());
+        return mapped;
+    }
+
+    bool armed() const noexcept { return mapped_ != nullptr; }
+
+    // 可调用地址。未映射时回落到原函数。
+    Fn entry() const noexcept { return mapped_ != nullptr ? mapped_ : origin_; }
+
+    void release() noexcept {
+        code_.release();
+        mapped_ = nullptr;
+        origin_ = nullptr;
+    }
+
+private:
+    RemappedCode code_;
+    Fn mapped_ = nullptr;
+    Fn origin_ = nullptr;
+};
+
+}  // namespace veil::platform
