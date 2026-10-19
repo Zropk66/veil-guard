@@ -5,4 +5,6 @@ out/
 *.pdb
 *.ilk
 *.exe
+*.lib
+temp.obj
 tests/vectors.json

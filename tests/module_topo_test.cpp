@@ -30,8 +30,8 @@ int main() {
     std::uint32_t foreign = 0;
     std::memcpy(&foreign, bytes, sizeof(foreign));
 
-    // 测试进程自身从构建目录加载，会被判定为外源模块，这是预期行为。
-    // 关键是 foreign 计数与路径哈希必须同时反映这一点。
+    // 外源计数与路径哈希必须同步：计数为零时哈希也必须为零。
+    // 计数本身随工具链变化，静态链接运行时的构建可能一个外源模块都没有。
     bool hash_nonzero = false;
     for (std::size_t i = sizeof(foreign); i < observation.size; ++i)
         if (bytes[i] != 0)
@@ -39,7 +39,35 @@ int main() {
 
     test::expect((foreign == 0) == !hash_nonzero,
                  "foreign count and path hash agree");
-    test::expect(foreign > 0, "test binary itself is classified as foreign");
+
+    // 自身模块与自身同目录，按设计必须可信；这同时验证了同目录
+    // 判定走的是目录比较而不是子串匹配。
+    {
+        wchar_t self[MAX_PATH];
+        const DWORD written = GetModuleFileNameW(nullptr, self, MAX_PATH);
+        test::expect(written > 0 && written < MAX_PATH,
+                     "resolves the running module path");
+        test::expect(
+            providers::ModuleTopology::is_path_trusted(self, written),
+            "module in the own directory is trusted");
+
+        // 同目录内的兄弟文件同样可信
+        wchar_t sibling[MAX_PATH];
+        std::memcpy(sibling, self, sizeof(wchar_t) * written);
+        sibling[written] = L'\0';
+        std::size_t cut = written;
+        while (cut > 0 && sibling[cut - 1] != L'\\')
+            --cut;
+        const wchar_t neighbour[] = L"neighbour.dll";
+        std::size_t cursor = cut;
+        for (std::size_t i = 0; neighbour[i] != L'\0' && cursor < MAX_PATH - 1; ++i)
+            sibling[cursor++] = neighbour[i];
+        sibling[cursor] = L'\0';
+        test::expect(
+            providers::ModuleTopology::is_path_trusted(
+                sibling, static_cast<std::uint32_t>(cursor)),
+            "sibling module in the own directory is trusted");
+    }
 
     // 系统目录必须被判定为可信
     const wchar_t system32[] = L"c:\\windows\\system32\\ntdll.dll";

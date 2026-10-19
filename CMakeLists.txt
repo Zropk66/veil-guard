@@ -47,10 +47,16 @@ else()
     set(VEIL_SYSCALL_STUB src/syscall_stub_mingw.S)
 endif()
 
+add_library(veil_syscall OBJECT ${VEIL_SYSCALL_STUB})
+if(NOT MSVC)
+    set_source_files_properties(${VEIL_SYSCALL_STUB} PROPERTIES LANGUAGE ASM)
+endif()
+
 add_library(veil_header_only INTERFACE)
 add_library(veil::header_only ALIAS veil_header_only)
 target_include_directories(veil_header_only INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_sources(veil_header_only INTERFACE ${VEIL_SYSCALL_STUB})
+# 汇编单元以对象文件形式并入每个消费者，避免把 C++ 专用选项传给汇编器
+target_sources(veil_header_only INTERFACE $<TARGET_OBJECTS:veil_syscall>)
 target_compile_definitions(veil_header_only INTERFACE
     VEIL_BUILD_SEED=${VEIL_BUILD_SEED}
     _CRT_SECURE_NO_WARNINGS
@@ -59,7 +65,10 @@ target_compile_definitions(veil_header_only INTERFACE
 )
 target_link_libraries(veil_header_only INTERFACE veil_monocypher ws2_32 secur32 crypt32)
 if(MSVC)
-    target_compile_options(veil_header_only INTERFACE /W4 /permissive- /Zc:__cplusplus)
+    # /utf-8 必需：源文件以 UTF-8 保存并含中文注释，缺省代码页会让
+    # 编译器在解析注释后的代码时错位
+    target_compile_options(veil_header_only INTERFACE
+        /W4 /permissive- /Zc:__cplusplus /utf-8)
 else()
     # RDRAND 由运行期检查决定是否可用，但指令本身需要目标特性才可编码
     target_compile_options(veil_header_only INTERFACE -Wall -Wextra -mrdrnd)
