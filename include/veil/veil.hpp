@@ -14,6 +14,10 @@
 #include "platform/peb.hpp"
 #include "platform/memory.hpp"
 #include "platform/image_file.hpp"
+#include "platform/image_map.hpp"
+#include "platform/decode.hpp"
+#include "platform/remap.hpp"
+#include "platform/scan.hpp"
 #include "providers/anti_debug.hpp"
 #include "providers/code_integrity.hpp"
 #include "providers/module_topo.hpp"
@@ -25,5 +29,6 @@
 #include "license/envelope.hpp"
 #include "guard.hpp"
 
-// 阶段二追加：
-// #include "transport/tls.hpp"
+// transport 不在本入口内。它引入 security.h 并要求先定义
+// SECURITY_WIN32，会让所有引用者承担该约束。需要 TLS 的调用方
+// 单独包含 transport/tls_client.hpp。

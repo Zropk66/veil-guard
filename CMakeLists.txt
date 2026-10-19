@@ -111,7 +111,7 @@ set(VEIL_TEST_TARGETS
     syscall_test peb_test image_file_test scan_test image_map_test remap_test
     anti_debug_test code_integrity_test module_topo_test
     layout_test binder_test zero_baseline_test envelope_test vectors_test
-    guard_test tls_client_test tls_live_test spki_test)
+    guard_test tls_client_test tls_live_test spki_test umbrella_test)
 
 if(VEIL_BUILD_TESTS)
     enable_testing()
