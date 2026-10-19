@@ -41,6 +41,7 @@ public:
 
     // 构造一份信封：先加密，再对信封全部字节签名
     std::size_t seal(const void* card_key, std::size_t card_key_len,
+                     const void* hwid, std::size_t hwid_len,
                      const void* evidence, std::size_t evidence_len,
                      std::uint8_t domain, std::uint64_t issued_at,
                      const std::uint8_t* nonce,
@@ -51,11 +52,13 @@ public:
             plaintext_len > license::SignedEnvelope::MAX_PLAINTEXT)
             return 0;
 
+        const license::SignedEnvelope::Inputs inputs{
+            card_key, card_key_len, hwid, hwid_len,
+            evidence, evidence_len, domain};
+
         std::uint8_t session_key[evidence::Binder::KEY_SIZE];
-        if (!evidence::Binder::derive(card_key, card_key_len, nonce,
-                                      license::SignedEnvelope::NONCE_SIZE,
-                                      evidence, evidence_len, domain,
-                                      session_key))
+        if (!license::SignedEnvelope::derive_session_key(nonce, inputs,
+                                                         session_key))
             return 0;
 
         std::uint8_t aad[license::SignedEnvelope::STAMP_SIZE +
@@ -109,6 +112,7 @@ struct Fixture {
     Server server{};
     char public_hex[65]{};
     const char* card_key = "VEIL-ENVELOPE-CARD";
+    const char* hwid = "MACHINE-ENVELOPE-1";
     std::uint8_t nonce[NONCE]{};
     std::uint8_t plaintext[PAYLOAD]{};
     std::uint8_t cipher[PAYLOAD]{};
@@ -127,14 +131,22 @@ struct Fixture {
     }
 
     void seal() {
-        server.seal(card_key, std::strlen(card_key), evidence,
-                    sizeof(evidence), 0x01, issued_at, nonce, plaintext,
-                    PAYLOAD, cipher, tag, signature);
+        server.seal(card_key, std::strlen(card_key),
+                    hwid, std::strlen(hwid),
+                    evidence, sizeof(evidence), 0x01, issued_at, nonce,
+                    plaintext, PAYLOAD, cipher, tag, signature);
     }
 
     license::SignedEnvelope::Wire wire() const noexcept {
         return license::SignedEnvelope::Wire{issued_at, nonce, cipher,
                                              PAYLOAD, tag, signature};
+    }
+
+    license::SignedEnvelope::Inputs inputs() const noexcept {
+        return license::SignedEnvelope::Inputs{
+            card_key, std::strlen(card_key),
+            hwid, std::strlen(hwid),
+            evidence, sizeof(evidence), 0x01};
     }
 };
 
@@ -158,11 +170,9 @@ int main() {
         std::uint8_t out[Fixture::PAYLOAD];
         std::memset(out, 0xAA, sizeof(out));
 
-        const std::size_t size = envelope.open(
-            fixture.wire(), fixture.card_key, std::strlen(fixture.card_key),
-            fixture.evidence, sizeof(fixture.evidence), 0x01,
-            fixture.issued_at, 0, out, sizeof(out));
-
+        const std::size_t size = envelope.open(fixture.wire(), fixture.inputs(),
+                                               fixture.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == Fixture::PAYLOAD, "opens a valid envelope");
         test::expect(std::memcmp(out, fixture.plaintext, Fixture::PAYLOAD) == 0,
                      "recovered plaintext matches");
@@ -177,11 +187,9 @@ int main() {
 
         std::uint8_t out[Fixture::PAYLOAD];
         std::memset(out, 0xAA, sizeof(out));
-        const std::size_t size = envelope.open(
-            altered.wire(), altered.card_key, std::strlen(altered.card_key),
-            altered.evidence, sizeof(altered.evidence), 0x01,
-            altered.issued_at, 0, out, sizeof(out));
-
+        const std::size_t size = envelope.open(altered.wire(), altered.inputs(),
+                                               altered.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == 0, "rejects a tampered signature");
         bool untouched = true;
         for (std::size_t i = 0; i < sizeof(out); ++i)
@@ -194,12 +202,10 @@ int main() {
     {
         Fixture altered;
         altered.cipher[0] ^= 0x01;
-        // 只改密文而不重签，签名必然失配
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = envelope.open(
-            altered.wire(), altered.card_key, std::strlen(altered.card_key),
-            altered.evidence, sizeof(altered.evidence), 0x01,
-            altered.issued_at, 0, out, sizeof(out));
+        const std::size_t size = envelope.open(altered.wire(), altered.inputs(),
+                                               altered.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == 0, "rejects a tampered ciphertext");
     }
 
@@ -208,10 +214,9 @@ int main() {
         Fixture altered;
         altered.tag[0] ^= 0x80;
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = envelope.open(
-            altered.wire(), altered.card_key, std::strlen(altered.card_key),
-            altered.evidence, sizeof(altered.evidence), 0x01,
-            altered.issued_at, 0, out, sizeof(out));
+        const std::size_t size = envelope.open(altered.wire(), altered.inputs(),
+                                               altered.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == 0, "rejects a tampered tag");
     }
 
@@ -220,10 +225,9 @@ int main() {
         Fixture altered;
         altered.issued_at += 1;
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = envelope.open(
-            altered.wire(), altered.card_key, std::strlen(altered.card_key),
-            altered.evidence, sizeof(altered.evidence), 0x01,
-            altered.issued_at, 0, out, sizeof(out));
+        const std::size_t size = envelope.open(altered.wire(), altered.inputs(),
+                                               altered.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == 0, "rejects a tampered timestamp");
     }
 
@@ -232,10 +236,9 @@ int main() {
         Fixture altered;
         altered.nonce[0] ^= 0x40;
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = envelope.open(
-            altered.wire(), altered.card_key, std::strlen(altered.card_key),
-            altered.evidence, sizeof(altered.evidence), 0x01,
-            altered.issued_at, 0, out, sizeof(out));
+        const std::size_t size = envelope.open(altered.wire(), altered.inputs(),
+                                               altered.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == 0, "rejects a tampered nonce");
     }
 
@@ -251,22 +254,50 @@ int main() {
                      "the unrelated key differs from the signing key");
 
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = other.open(
-            fixture.wire(), fixture.card_key, std::strlen(fixture.card_key),
-            fixture.evidence, sizeof(fixture.evidence), 0x01,
-            fixture.issued_at, 0, out, sizeof(out));
+        const std::size_t size = other.open(fixture.wire(), fixture.inputs(),
+                                            fixture.issued_at, 0, out,
+                                            sizeof(out));
         test::expect(size == 0, "rejects an envelope signed by another key");
     }
 
     // 卡密不符：签名仍然有效，但派生出的密钥不同，标签校验失败
     {
-        const char other_card[] = "VEIL-ENVELOPE-OTHER";
+        auto inputs = fixture.inputs();
+        inputs.card_key = "VEIL-ENVELOPE-OTHER";
+        inputs.card_key_len = std::strlen("VEIL-ENVELOPE-OTHER");
+
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = envelope.open(
-            fixture.wire(), other_card, std::strlen(other_card),
-            fixture.evidence, sizeof(fixture.evidence), 0x01,
-            fixture.issued_at, 0, out, sizeof(out));
+        const std::size_t size = envelope.open(fixture.wire(), inputs,
+                                               fixture.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == 0, "rejects a mismatched card key");
+    }
+
+    // HWID 不符：载荷只对签发时的设备可用
+    {
+        auto inputs = fixture.inputs();
+        inputs.hwid = "MACHINE-OTHER-9";
+        inputs.hwid_len = std::strlen("MACHINE-OTHER-9");
+
+        std::uint8_t out[Fixture::PAYLOAD];
+        const std::size_t size = envelope.open(fixture.wire(), inputs,
+                                               fixture.issued_at, 0, out,
+                                               sizeof(out));
+        test::expect(size == 0, "rejects a mismatched hwid");
+    }
+
+    // 空 HWID：未启用绑定的授权走这条路径，与绑定授权派生出不同密钥
+    {
+        auto inputs = fixture.inputs();
+        inputs.hwid = nullptr;
+        inputs.hwid_len = 0;
+
+        std::uint8_t out[Fixture::PAYLOAD];
+        const std::size_t size = envelope.open(fixture.wire(), inputs,
+                                               fixture.issued_at, 0, out,
+                                               sizeof(out));
+        test::expect(size == 0,
+                     "unbound inputs do not open a bound envelope");
     }
 
     // 证据不符：模拟环境被篡改
@@ -276,131 +307,114 @@ int main() {
                     sizeof(tampered_evidence));
         tampered_evidence[0] = 0x5A;
 
+        auto inputs = fixture.inputs();
+        inputs.evidence = tampered_evidence;
+        inputs.evidence_len = sizeof(tampered_evidence);
+
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = envelope.open(
-            fixture.wire(), fixture.card_key, std::strlen(fixture.card_key),
-            tampered_evidence, sizeof(tampered_evidence), 0x01,
-            fixture.issued_at, 0, out, sizeof(out));
+        const std::size_t size = envelope.open(fixture.wire(), inputs,
+                                               fixture.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == 0,
                      "rejects evidence deviating from the baseline");
     }
 
     // 域不符
     {
+        auto inputs = fixture.inputs();
+        inputs.domain = 0x02;
+
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = envelope.open(
-            fixture.wire(), fixture.card_key, std::strlen(fixture.card_key),
-            fixture.evidence, sizeof(fixture.evidence), 0x02,
-            fixture.issued_at, 0, out, sizeof(out));
+        const std::size_t size = envelope.open(fixture.wire(), inputs,
+                                               fixture.issued_at, 0, out,
+                                               sizeof(out));
         test::expect(size == 0, "rejects a mismatched domain");
     }
 
     // 年龄检查
     {
         std::uint8_t out[Fixture::PAYLOAD];
+        const auto inputs = fixture.inputs();
 
-        test::expect(envelope.open(fixture.wire(), fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 60000,
-                                   out, sizeof(out)) == Fixture::PAYLOAD,
+        test::expect(envelope.open(fixture.wire(), inputs, fixture.issued_at,
+                                   60000, out, sizeof(out)) == Fixture::PAYLOAD,
                      "accepts an envelope issued just now");
-
-        test::expect(envelope.open(fixture.wire(), fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at + 59000, 60000,
-                                   out, sizeof(out)) == Fixture::PAYLOAD,
+        test::expect(envelope.open(fixture.wire(), inputs,
+                                   fixture.issued_at + 59000, 60000, out,
+                                   sizeof(out)) == Fixture::PAYLOAD,
                      "accepts an envelope within the age window");
-
-        test::expect(envelope.open(fixture.wire(), fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at + 61000, 60000,
-                                   out, sizeof(out)) == 0,
+        test::expect(envelope.open(fixture.wire(), inputs,
+                                   fixture.issued_at + 61000, 60000, out,
+                                   sizeof(out)) == 0,
                      "rejects an envelope past the age window");
-
-        // 时钟早于签发时间一律拒绝
-        test::expect(envelope.open(fixture.wire(), fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at - 1, 60000,
-                                   out, sizeof(out)) == 0,
+        test::expect(envelope.open(fixture.wire(), inputs,
+                                   fixture.issued_at - 1, 60000, out,
+                                   sizeof(out)) == 0,
                      "rejects an envelope issued in the future");
     }
 
     // 输入校验
     {
         std::uint8_t out[Fixture::PAYLOAD];
+        const auto inputs = fixture.inputs();
         auto wire = fixture.wire();
 
-        test::expect(envelope.open(wire, fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 0, nullptr,
+        test::expect(envelope.open(wire, inputs, fixture.issued_at, 0, nullptr,
                                    sizeof(out)) == 0,
                      "null output is rejected");
-
-        test::expect(envelope.open(wire, fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 0, out, 8) == 0,
+        test::expect(envelope.open(wire, inputs, fixture.issued_at, 0, out, 8) == 0,
                      "undersized output is rejected");
 
         auto no_nonce = wire;
         no_nonce.nonce = nullptr;
-        test::expect(envelope.open(no_nonce, fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 0, out,
+        test::expect(envelope.open(no_nonce, inputs, fixture.issued_at, 0, out,
                                    sizeof(out)) == 0,
                      "null nonce is rejected");
 
         auto no_sig = wire;
         no_sig.signature = nullptr;
-        test::expect(envelope.open(no_sig, fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 0, out,
+        test::expect(envelope.open(no_sig, inputs, fixture.issued_at, 0, out,
                                    sizeof(out)) == 0,
                      "null signature is rejected");
 
         auto no_tag = wire;
         no_tag.tag = nullptr;
-        test::expect(envelope.open(no_tag, fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 0, out,
+        test::expect(envelope.open(no_tag, inputs, fixture.issued_at, 0, out,
                                    sizeof(out)) == 0,
                      "null tag is rejected");
 
         auto no_cipher = wire;
         no_cipher.cipher = nullptr;
-        test::expect(envelope.open(no_cipher, fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 0, out,
+        test::expect(envelope.open(no_cipher, inputs, fixture.issued_at, 0, out,
                                    sizeof(out)) == 0,
                      "null cipher is rejected");
 
         auto toobig = wire;
         toobig.cipher_length = license::SignedEnvelope::MAX_PLAINTEXT + 1;
-        test::expect(envelope.open(toobig, fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 0, out,
+        test::expect(envelope.open(toobig, inputs, fixture.issued_at, 0, out,
                                    sizeof(out)) == 0,
                      "oversized cipher is rejected");
+
+        auto bad_inputs = inputs;
+        bad_inputs.card_key = nullptr;
+        test::expect(envelope.open(wire, bad_inputs, fixture.issued_at, 0, out,
+                                   sizeof(out)) == 0,
+                     "null card key is rejected");
+
+        auto null_evidence = inputs;
+        null_evidence.evidence = nullptr;
+        null_evidence.evidence_len = 16;
+        test::expect(envelope.open(wire, null_evidence, fixture.issued_at, 0,
+                                   out, sizeof(out)) == 0,
+                     "null evidence with nonzero length is rejected");
     }
 
     // 未配置验签公钥时必须拒绝
     {
         license::SignedEnvelope unloaded;
         std::uint8_t out[Fixture::PAYLOAD];
-        test::expect(unloaded.open(fixture.wire(), fixture.card_key,
-                                   std::strlen(fixture.card_key),
-                                   fixture.evidence, sizeof(fixture.evidence),
-                                   0x01, fixture.issued_at, 0, out,
+        test::expect(unloaded.open(fixture.wire(), fixture.inputs(),
+                                   fixture.issued_at, 0, out,
                                    sizeof(out)) == 0,
                      "unloaded verifier refuses to open");
         test::expect(!unloaded.set_verifier_key_hex("zz"),
@@ -409,14 +423,37 @@ int main() {
                      "failed key load leaves the verifier unloaded");
     }
 
-    // 空证据同样可用：未启用任何 provider 的场景
+    // 空证据且空 HWID：未启用任何 provider 且未绑定的场景
     {
+        Fixture unbound;
+        unbound.hwid = "";
+        unbound.evidence[0] = 0;
+        // 重新签发一份空输入的合法信封，验证该组合本身可用
+        unbound.seal();
+
         std::uint8_t out[Fixture::PAYLOAD];
-        const std::size_t size = envelope.open(
-            fixture.wire(), fixture.card_key, std::strlen(fixture.card_key),
-            nullptr, 0, 0x01, fixture.issued_at, 0, out, sizeof(out));
-        test::expect(size == 0,
-                     "empty evidence derives a different key and fails");
+        const std::size_t size = envelope.open(unbound.wire(), unbound.inputs(),
+                                               unbound.issued_at, 0, out,
+                                               sizeof(out));
+        test::expect(size == Fixture::PAYLOAD,
+                     "empty hwid with zero evidence opens its own envelope");
+    }
+
+    // 派生函数与 open 必须给出同一把密钥
+    {
+        const auto inputs = fixture.inputs();
+        std::uint8_t direct[evidence::Binder::KEY_SIZE];
+        test::expect(license::SignedEnvelope::derive_session_key(
+                         fixture.nonce, inputs, direct),
+                     "derives a session key directly");
+
+        std::uint8_t via_open[evidence::Binder::KEY_SIZE];
+        test::expect(license::SignedEnvelope::derive_session_key(
+                         fixture.nonce, fixture.inputs(), via_open),
+                     "derives the same key through the fixture inputs");
+        test::expect(detail::constant_time_compare(direct, via_open,
+                                                   sizeof(direct)) == 1,
+                     "direct derivation is reproducible");
     }
 
     return test::finish("signed_envelope");

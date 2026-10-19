@@ -5,6 +5,7 @@
 #include "../crypto/ed25519.hpp"
 #include "../detail/common.hpp"
 #include "../evidence/binder.hpp"
+#include "envelope.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -73,6 +74,24 @@ public:
         const std::uint8_t* signature;
     };
 
+    // 派生输入。证据与 HWID 并列参与，任一变化都会导致派生分叉。
+    //
+    // HWID 不做独立比对：它进入 HKDF 的 info，不符时派生出另一把密钥，
+    // 表现为标签校验失败。因此不存在「HWID 是否匹配」这样一个可被单点
+    // 改写的分支。
+    //
+    // 空 HWID 合法，用于未启用绑定的授权。此时派生结果与任何绑定授权
+    // 都不一致，等价于拒绝。
+    struct Inputs {
+        const void* card_key;
+        std::size_t card_key_len;
+        const void* hwid;
+        std::size_t hwid_len;
+        const void* evidence;
+        std::size_t evidence_len;
+        std::uint8_t domain;
+    };
+
     // 打开信封，返回明文长度。
     //
     // 失败返回 0，且不留下任何输出字节。用长度而非布尔作为返回值的
@@ -82,10 +101,7 @@ public:
     //
     // max_age_ms 为 0 表示不做年龄检查。非零时拒绝 now_ms 与 issued_at
     // 相差超过该值的信封，用于抵御重放。时钟超前一律拒绝。
-    std::size_t open(const Wire& wire,
-                     const void* card_key, std::size_t card_key_len,
-                     const void* evidence, std::size_t evidence_len,
-                     std::uint8_t domain,
+    std::size_t open(const Wire& wire, const Inputs& inputs,
                      std::uint64_t now_ms,
                      std::uint64_t max_age_ms,
                      std::uint8_t* out, std::size_t out_capacity) noexcept {
@@ -99,6 +115,10 @@ public:
         if (wire.cipher_length == 0 || wire.cipher_length > MAX_PLAINTEXT)
             return 0;
         if (out_capacity < wire.cipher_length)
+            return 0;
+        if (inputs.hwid_len > MAX_MACHINE_ID)
+            return 0;
+        if (inputs.hwid == nullptr && inputs.hwid_len != 0)
             return 0;
 
         // 签名覆盖信封全部字节
@@ -126,11 +146,10 @@ public:
                 return 0;
         }
 
+        // info = 证据 ‖ 机器标识 ‖ 域。机器标识带长度前缀，避免
+        // 「证据末尾字节与机器标识开头相同」被拼成同一序列。
         std::uint8_t session_key[evidence::Binder::KEY_SIZE];
-        if (!evidence::Binder::derive(card_key, card_key_len,
-                                      wire.nonce, NONCE_SIZE,
-                                      evidence, evidence_len, domain,
-                                      session_key)) {
+        if (!derive_session_key(wire.nonce, inputs, session_key)) {
             detail::secure_wipe(session_key, sizeof(session_key));
             return 0;
         }
@@ -142,7 +161,7 @@ public:
         aad_len += STAMP_SIZE;
         for (std::size_t i = 0; i < NONCE_SIZE; ++i)
             aad[aad_len++] = wire.nonce[i];
-        aad[aad_len++] = domain;
+        aad[aad_len++] = inputs.domain;
 
         Aes256Gcm cipher;
         cipher.set_key(session_key);
@@ -162,7 +181,52 @@ public:
         return wire.cipher_length;
     }
 
+    // 派生会话密钥。独立成公开静态函数，供服务端实现与跨实现夹具
+    // 复用同一份 info 构造逻辑，避免两侧各写一遍导致字节错位。
+    static bool derive_session_key(const std::uint8_t* nonce,
+                                   const Inputs& inputs,
+                                   std::uint8_t out[evidence::Binder::KEY_SIZE]) noexcept {
+        if (nonce == nullptr || out == nullptr)
+            return false;
+        if (inputs.card_key == nullptr || inputs.card_key_len == 0)
+            return false;
+        if (inputs.evidence == nullptr && inputs.evidence_len != 0)
+            return false;
+        if (inputs.hwid_len > MAX_MACHINE_ID)
+            return false;
+
+        // 布局：证据 ‖ 机器标识长度 ‖ 机器标识 ‖ 域
+        //
+        // 长度前缀是必要的。没有它，证据末字节与机器标识首字节相同的
+        // 两组输入会拼出同一段 info，派生同一密钥。
+        std::uint8_t info[MAX_EVIDENCE_BYTES + 1 + MAX_MACHINE_ID + 1];
+        std::size_t info_len = 0;
+
+        if (inputs.evidence_len > MAX_EVIDENCE_BYTES)
+            return false;
+
+        const auto* evidence_bytes =
+            static_cast<const std::uint8_t*>(inputs.evidence);
+        for (std::size_t i = 0; i < inputs.evidence_len; ++i)
+            info[info_len++] = evidence_bytes[i];
+
+        info[info_len++] = static_cast<std::uint8_t>(inputs.hwid_len);
+
+        const auto* id_bytes = static_cast<const std::uint8_t*>(inputs.hwid);
+        for (std::size_t i = 0; i < inputs.hwid_len; ++i)
+            info[info_len++] = id_bytes[i];
+
+        info[info_len++] = inputs.domain;
+
+        hkdf_sha256(inputs.card_key, inputs.card_key_len, nonce, NONCE_SIZE,
+                    info, info_len, out, evidence::Binder::KEY_SIZE);
+
+        detail::secure_wipe(info, sizeof(info));
+        return true;
+    }
+
 private:
+
     Ed25519 verifier_;
 };
 

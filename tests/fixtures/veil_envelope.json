@@ -1,0 +1,13 @@
+{
+  "cardKey": "VEIL-CARD-FIXTURE",
+  "hwid": "MACHINE-FIXTURE-1",
+  "evidenceHex": "000b16212c37424d58636e79848f9aa5b0bbc6d1dce7f2fd08131e29343f4a55606b76818c97a2adb8c3ced9e4effa05101b26313c47525d68737e89949faab5c0cbd6e1",
+  "domain": 1,
+  "publicKeyHex": "88d4748e130ea8b93e534cb014fd460418431edb5822cb8a8c7e93acdf650b76",
+  "issuedAt": 1730000000000,
+  "nonceHex": "a0a1a2a3a4a5a6a7a8a9aaab",
+  "cipherHex": "7764ca24190d760e99c74dea3b6db7eda665309e408631c1",
+  "tagHex": "5b6a9684ccb3f94c18c42c112155f01b",
+  "signatureHex": "44959415972fa2fca5af36bcf09212cdf59c016b85b9f94ee4b33a05cd83021709586b89afd0974d3ff1bcf254205e2dac4adb4587030ab804d37ae6897e8f01",
+  "plaintextHex": "001409cc9201000000c02cc8990100000f00000000000000"
+}
