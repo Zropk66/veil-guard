@@ -61,7 +61,8 @@ target_link_libraries(veil_header_only INTERFACE veil_monocypher ws2_32 secur32 
 if(MSVC)
     target_compile_options(veil_header_only INTERFACE /W4 /permissive- /Zc:__cplusplus)
 else()
-    target_compile_options(veil_header_only INTERFACE -Wall -Wextra)
+    # RDRAND 由运行期检查决定是否可用，但指令本身需要目标特性才可编码
+    target_compile_options(veil_header_only INTERFACE -Wall -Wextra -mrdrnd)
 endif()
 
 option(VEIL_BUILD_TESTS "Build veil tests" OFF)
