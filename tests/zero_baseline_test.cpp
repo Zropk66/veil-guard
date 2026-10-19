@@ -35,6 +35,8 @@ int main() {
     expect_zero<providers::CertificatePin>(
         "certificate pin observation is zero without tls");
 
+    // 代码完整性：磁盘与内存摘要一致时差值槽位必须全零，这是布局 2
+    // 能用零基线复现的前提
     {
         providers::CodeIntegrity probe;
         test::expect(probe.register_module_sections(),

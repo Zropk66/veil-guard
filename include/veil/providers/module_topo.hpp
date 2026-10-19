@@ -35,33 +35,41 @@ public:
     // 前缀匹配，且要求可信前缀之后紧跟分隔符或字符串结束。
     // 纯子串匹配会把 c:\temp\x\system32\evil.dll 判为可信；前缀匹配但
     // 不检查分隔符则会把 c:\windows\system32evil\x.dll 判为可信。
+    //
+    // 系统前缀从 GetSystemDirectoryW 与 GetWindowsDirectoryW 现取，
+    // 不硬编码 c:\windows。Windows 装在非 C 盘时硬编码会让全部系统
+    // 模块被判为外源。
     static bool is_path_trusted(const wchar_t* path,
                                 std::uint32_t path_length) noexcept {
         if (path == nullptr || path_length == 0)
             return false;
 
-        static const wchar_t* const kTrustedPrefixes[] = {
-            L"c:\\windows\\system32",
-            L"c:\\windows\\syswow64",
-            L"c:\\windows\\winsxs",
-            L"c:\\windows\\systemapps",
-            L"c:\\program files\\windowsapps",
-        };
+        wchar_t prefix[MAX_PATH];
 
-        for (const wchar_t* prefix : kTrustedPrefixes) {
-            std::uint32_t prefix_len = 0;
-            while (prefix[prefix_len] != L'\0')
-                ++prefix_len;
-            if (prefix_len > path_length)
-                continue;
-            if (!platform::starts_with_ci(path, path_length, prefix))
-                continue;
-            if (prefix_len == path_length)
+        DWORD written = GetSystemDirectoryW(prefix, MAX_PATH);
+        if (written > 0 && written < MAX_PATH) {
+            if (length_prefix_match(path, path_length, prefix,
+                                    static_cast<std::uint32_t>(written)))
                 return true;
+        }
 
-            const wchar_t next = path[prefix_len];
-            if (next == L'\\' || next == L'/')
-                return true;
+        written = GetWindowsDirectoryW(prefix, MAX_PATH);
+        if (written > 0 && written < MAX_PATH) {
+            // 系统目录之外还有 winsxs 与 systemapps 两处
+            static const wchar_t* const kSuffixes[] = {
+                L"\\winsxs",
+                L"\\systemapps",
+            };
+            for (const wchar_t* suffix : kSuffixes) {
+                std::size_t cursor = written;
+                for (std::size_t k = 0; suffix[k] != L'\0' &&
+                                       cursor < MAX_PATH - 1; ++k)
+                    prefix[cursor++] = suffix[k];
+                prefix[cursor] = L'\0';
+                if (length_prefix_match(path, path_length, prefix,
+                                        static_cast<std::uint32_t>(cursor)))
+                    return true;
+            }
         }
 
         // 与自身模块同目录的文件视为可信。这里用「目录部分与自身一致」
@@ -100,6 +108,26 @@ public:
     }
 
 private:
+    // 前缀相等，且前缀之后是分隔符或字符串结束
+    static bool length_prefix_match(const wchar_t* path,
+                                    std::uint32_t path_length,
+                                    const wchar_t* prefix,
+                                    std::uint32_t prefix_length) noexcept {
+        if (prefix_length == 0 || prefix_length > path_length)
+            return false;
+
+        for (std::uint32_t i = 0; i < prefix_length; ++i) {
+            if (platform::lower_ascii(path[i]) != platform::lower_ascii(prefix[i]))
+                return false;
+        }
+
+        if (prefix_length == path_length)
+            return true;
+
+        const wchar_t next = path[prefix_length];
+        return next == L'\\' || next == L'/';
+    }
+
     static bool is_same_directory_as_self(const wchar_t* path,
                                           std::uint32_t path_length) noexcept {
         wchar_t self[MAX_PATH];

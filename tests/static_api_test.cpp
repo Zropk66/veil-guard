@@ -19,8 +19,8 @@ int main() {
         test::expect(veil_capture_standard_evidence(buffer, sizeof(buffer),
                                                     &written),
                      "captures the standard evidence");
-        test::expect(written == 16 + 20 + 32,
-                     "evidence blob covers the three standard providers");
+        test::expect(written == STANDARD_EVIDENCE_SIZE,
+                     "evidence blob covers the standard providers");
 
         std::uint8_t again[1024];
         std::size_t written_again = 0;
@@ -127,12 +127,12 @@ int main() {
                      "captures the integrity evidence");
         test::expect(written == INTEGRITY_EVIDENCE_SIZE,
                      "integrity evidence covers the registered layout");
-        test::expect(written == 328, "integrity evidence is 328 bytes");
+        test::expect(written == 276, "integrity evidence is 276 bytes");
 
         // 正常环境下磁盘与内存摘要一致，差值槽位全零。区域计数非零
         // 是布局描述，不是判定值。
         bool deltas_zero = true;
-        for (std::size_t i = sizeof(std::uint32_t) + 68; i < written; ++i)
+        for (std::size_t i = sizeof(std::uint32_t) + 16; i < written; ++i)
             if (buffer[i] != 0)
                 deltas_zero = false;
         test::expect(deltas_zero,

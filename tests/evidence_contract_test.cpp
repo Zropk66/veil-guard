@@ -16,18 +16,18 @@ int main() {
     // 标准布局的长度是对外契约。服务端用零基线按同一长度构造 info，
     // 这里的断言把它钉住，改动 provider 组合会立刻失败而不是静默
     // 让全部客户端派生分叉。
-    using Standard = evidence::Layout<providers::AntiDebugSnapshot,
-                                      providers::ModuleTopology,
-                                      providers::CertificatePin>;
+    //
+    // 标准布局只含反调试：只有它的全部字段在未篡改环境下恒为零。
+    // 模块拓扑随安装目录与加载顺序变化，证书指纹在走 TLS 时必然是
+    // 真实摘要，两者都不满足零基线。
+    using Standard = evidence::Layout<providers::AntiDebugSnapshot>;
 
     test::expect(Standard::SIZE == STANDARD_EVIDENCE_SIZE,
                  "standard layout matches the published contract");
-    test::expect(STANDARD_EVIDENCE_SIZE == 68,
-                 "the contract value is 68 bytes");
+    test::expect(STANDARD_EVIDENCE_SIZE == 16,
+                 "the contract value is 16 bytes");
     test::expect(Standard::SIZE ==
-                     providers::AntiDebugSnapshot::OBSERVATION_SIZE +
-                         providers::ModuleTopology::OBSERVATION_SIZE +
-                         providers::CertificatePin::OBSERVATION_SIZE,
+                     providers::AntiDebugSnapshot::OBSERVATION_SIZE,
                  "layout length is the sum of its providers");
 
     // 各 provider 的单独长度
@@ -42,29 +42,26 @@ int main() {
     // 客户端测到任何非零都会导致派生分叉。
     {
         const providers::AntiDebugSnapshot debug_probe;
-        const providers::ModuleTopology topo_probe;
-        const providers::CertificatePin pin_probe;
 
         std::uint8_t buffer[Standard::SIZE];
         std::memset(buffer, 0xCC, sizeof(buffer));
-        test::expect(Standard::serialize(buffer, sizeof(buffer), debug_probe,
-                                          topo_probe, pin_probe),
+        test::expect(Standard::serialize(buffer, sizeof(buffer), debug_probe),
                      "standard layout serializes");
 
-        // 反调试与证书指纹必须全零。模块拓扑在测试进程里可能非零，
-        // 因为它从构建目录加载，不属于任何可信前缀。
         bool debug_zero = true;
         const std::uint8_t* bytes = buffer;
         for (std::size_t i = 0; i < 16; ++i)
             if (bytes[i] != 0)
                 debug_zero = false;
         test::expect(debug_zero, "anti-debug portion is zero when undebugged");
+    }
 
-        bool pin_zero = true;
-        for (std::size_t i = 36; i < 68; ++i)
-            if (bytes[i] != 0)
-                pin_zero = false;
-        test::expect(pin_zero, "certificate pin portion is zero without tls");
+    // 模块拓扑与证书指纹的正常值不是恒零，因此不得进入默认布局。
+    // 这条断言防止后续有人把它们加回去。
+    {
+        test::expect(STANDARD_EVIDENCE_SIZE ==
+                         providers::AntiDebugSnapshot::OBSERVATION_SIZE,
+                     "the standard layout carries no non-zero provider");
     }
 
     // 布局标识与服务端登记表的键必须一一对应。客户端在请求中声明该
@@ -80,14 +77,12 @@ int main() {
     // 含代码完整性 provider 的布局
     {
         using Integrity = evidence::Layout<providers::AntiDebugSnapshot,
-                                           providers::ModuleTopology,
-                                           providers::CertificatePin,
                                            providers::CodeIntegrity>;
 
         test::expect(Integrity::SIZE == INTEGRITY_EVIDENCE_SIZE,
                      "integrity layout matches the published contract");
-        test::expect(INTEGRITY_EVIDENCE_SIZE == 328,
-                     "the integrity contract value is 328 bytes");
+        test::expect(INTEGRITY_EVIDENCE_SIZE == 276,
+                     "the integrity contract value is 276 bytes");
         test::expect(providers::CodeIntegrity::OBSERVATION_SIZE == 260,
                      "code integrity observation is 260 bytes");
         test::expect(Integrity::SIZE == STANDARD_EVIDENCE_SIZE +

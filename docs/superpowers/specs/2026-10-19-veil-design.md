@@ -49,7 +49,7 @@ L0  crypto      AES-256-GCM / SHA-256 / HMAC / HKDF / Ed25519
 L1  platform    syscall 直发 / PEB 遍历 / 内存内省 / 磁盘映像读取
 L2  providers   反调试 · 完整性 · 模块拓扑 · 证书指纹 · 熵源
 L3  evidence    观测聚合 → 规范编码 → HKDF(info) → 会话密钥
-L4  optional    授权信封（RSA-OAEP + AES-256-GCM + Ed25519）
+L4  optional    签名信封（Ed25519 + AES-256-GCM）
 ```
 
 依赖方向单向向下。L2 只依赖 L0 与 L1，L3 只依赖 L0 与 L2 的观测，
@@ -215,17 +215,22 @@ static_assert(veil::license::PayloadLike<MyLicense>);
 协议形状：
 
 ```
-信封     = RSA-OAEP-SHA256(会话密钥) ‖ AES-256-GCM(nonce, 载荷)
-绑定校验 = HMAC(HKDF(授权密钥, nonce, HWID ‖ 域 0x02), nonce ‖ 密文) 前 16 字节
-签名     = Ed25519(nonce ‖ 绑定校验 ‖ 密文)   服务端私钥
-密钥流   = HKDF(授权密钥, nonce, HWID ‖ 域 0x01) 展开至载荷长度
-密文     = 载荷 ⊕ 密钥流
+info     = 证据 ‖ HWID长度 ‖ HWID ‖ 域
+会话密钥 = HKDF-SHA256(ikm=卡密, salt=nonce, info)
+AAD      = issued_at ‖ nonce ‖ 域
+信封     = issued_at ‖ nonce ‖ AES-256-GCM(会话密钥, AAD, 载荷) ‖ 标签
+签名     = Ed25519(信封全部字节)   服务端私钥
 ```
 
-HWID 不参与任何独立比对，而是决定绑定校验，校验又在签名覆盖范围内。
-机器不符时校验不符，签名自然验不过，不存在「机器是否匹配」这样
-可单点 patch 的分支。校验值由客户端本地算出，不随包传输，
-攻击者没有可剥离的字段。
+HWID 与证据都是派生输入，不做独立比对。不符时派生出另一把密钥，
+标签校验失败，不存在「机器是否匹配」这样可单点 patch 的分支。
+
+处理顺序为验签 → 时间窗 → 派生 → 解密。验签只需公钥，是纯公开计算，
+放在最前让垃圾输入在接触解密器之前被挡住，不给解密 oracle。
+
+服务端侧的证据输入必须是它自己知道的零基线，不能照抄客户端上报的值。
+照抄会让攻击者把篡改后测到的非零证据一并发来，两侧仍派生同一把密钥。
+上报值只用于记录。
 
 时效折算由消费者侧完成，库提供模板钩子：
 

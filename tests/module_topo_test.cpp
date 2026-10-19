@@ -69,28 +69,83 @@ int main() {
             "sibling module in the own directory is trusted");
     }
 
-    // 系统目录必须被判定为可信
-    const wchar_t system32[] = L"c:\\windows\\system32\\ntdll.dll";
-    test::expect(providers::ModuleTopology::is_path_trusted(system32, len(system32)),
-                 "system32 path is trusted");
-    const wchar_t upper[] = L"C:\\Windows\\System32\\KERNEL32.DLL";
-    test::expect(providers::ModuleTopology::is_path_trusted(upper, len(upper)),
-                 "trust check is case insensitive");
-    const wchar_t winsxs[] =
-        L"c:\\windows\\winsxs\\amd64_microsoft.windows.common-controls_6595b64144ccf1df_6.0.22621.1_none_1a5b3c4d5e6f7081\\comctl32.dll";
-    test::expect(providers::ModuleTopology::is_path_trusted(winsxs, len(winsxs)),
-                 "winsxs path is trusted");
+    // 系统目录必须被判定为可信。前缀从系统现取，因此 Windows 装在
+    // 非 C 盘时同样成立。
+    {
+        wchar_t system_dir[MAX_PATH];
+        const DWORD written = GetSystemDirectoryW(system_dir, MAX_PATH);
+        test::expect(written > 0 && written < MAX_PATH,
+                     "resolves the system directory");
+        if (written > 0 && written < MAX_PATH) {
+            test::expect(
+                providers::ModuleTopology::is_path_trusted(system_dir, written),
+                "system directory is trusted");
+        }
+
+        wchar_t windows_dir[MAX_PATH];
+        const DWORD windows_written =
+            GetWindowsDirectoryW(windows_dir, MAX_PATH);
+        test::expect(windows_written > 0 && windows_written < MAX_PATH,
+                     "resolves the windows directory");
+        if (windows_written > 0 && windows_written < MAX_PATH) {
+            const wchar_t suffix[] = L"\\winsxs\\x.dll";
+            std::size_t cursor = windows_written;
+            for (std::size_t i = 0; suffix[i] != L'\0' &&
+                                   cursor < MAX_PATH - 1; ++i)
+                windows_dir[cursor++] = suffix[i];
+            windows_dir[cursor] = L'\0';
+            test::expect(
+                providers::ModuleTopology::is_path_trusted(
+                    windows_dir, static_cast<std::uint32_t>(cursor)),
+                "winsxs path is trusted");
+        }
+    }
+
+    // 大小写不敏感
+    {
+        wchar_t system_dir[MAX_PATH];
+        const DWORD written = GetSystemDirectoryW(system_dir, MAX_PATH);
+        if (written > 0 && written < MAX_PATH) {
+            wchar_t upper_dir[MAX_PATH];
+            std::memcpy(upper_dir, system_dir,
+                        sizeof(wchar_t) * (written + 1));
+            for (DWORD i = 0; i < written; ++i)
+                if (upper_dir[i] >= L'a' && upper_dir[i] <= L'z')
+                    upper_dir[i] = static_cast<wchar_t>(upper_dir[i] - 32);
+            test::expect(
+                providers::ModuleTopology::is_path_trusted(upper_dir, written),
+                "trust check is case insensitive");
+        }
+    }
 
     // 前缀匹配不得放过伪装目录
     const wchar_t temp[] = L"c:\\temp\\evil.dll";
     test::expect(!providers::ModuleTopology::is_path_trusted(temp, len(temp)),
                  "temp path is untrusted");
-    const wchar_t near_miss[] = L"c:\\windows\\system32evil\\x.dll";
-    test::expect(!providers::ModuleTopology::is_path_trusted(near_miss, len(near_miss)),
-                 "path with trusted prefix inside a longer name is untrusted");
     const wchar_t traversal[] = L"c:\\temp\\..\\windows\\system32\\x.dll";
     test::expect(!providers::ModuleTopology::is_path_trusted(traversal, len(traversal)),
                  "embedded traversal is not normalised into trust");
+
+    // 可信前缀之后必须紧跟分隔符，否则形如 system32evil 的目录会被放过
+    {
+        wchar_t system_dir[MAX_PATH];
+        const DWORD written = GetSystemDirectoryW(system_dir, MAX_PATH);
+        if (written > 0 && written < MAX_PATH) {
+            wchar_t near_miss[MAX_PATH];
+            std::memcpy(near_miss, system_dir,
+                        sizeof(wchar_t) * written);
+            const wchar_t tail[] = L"evil\\x.dll";
+            std::size_t cursor = written;
+            for (std::size_t i = 0; tail[i] != L'\0' &&
+                                   cursor < MAX_PATH - 1; ++i)
+                near_miss[cursor++] = tail[i];
+            near_miss[cursor] = L'\0';
+            test::expect(
+                !providers::ModuleTopology::is_path_trusted(
+                    near_miss, static_cast<std::uint32_t>(cursor)),
+                "path with trusted prefix inside a longer name is untrusted");
+        }
+    }
 
     // 边界输入
     test::expect(!providers::ModuleTopology::is_path_trusted(nullptr, 0),

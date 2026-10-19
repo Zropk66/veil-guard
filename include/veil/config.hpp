@@ -38,13 +38,18 @@ inline constexpr std::size_t MAX_EVIDENCE_BYTES = 1024;
 // 服务端按同一长度用零基线构造 info。客户端改动 provider 组合后服务端
 // 必须同步，否则全部客户端派生分叉。该值由 guard_impl.cpp 的静态断言
 // 与标准布局锁定。
-inline constexpr std::size_t STANDARD_EVIDENCE_SIZE = 68;
+//
+// 只含反调试一组观测。模块拓扑与证书指纹不进默认布局：两者的正常值
+// 都不是恒零，进入默认布局会让正常环境下派生的密钥与服务端的零基线
+// 不一致，授权直接解不开。需要它们的接入方自行装配组合并在服务端
+// 登记相应布局。
+inline constexpr std::size_t STANDARD_EVIDENCE_SIZE = 16;
 
 // 含代码完整性 provider 的布局长度。
 //
 // 服务端登记表里对应布局 2。客户端启用这套布局时必须在请求中声明
 // 布局标识，否则服务端按默认布局派生，两侧密钥不同。
-inline constexpr std::size_t INTEGRITY_EVIDENCE_SIZE = 328;
+inline constexpr std::size_t INTEGRITY_EVIDENCE_SIZE = 276;
 
 // 布局标识。与服务端 EVIDENCE_LAYOUTS 的键一一对应。
 //

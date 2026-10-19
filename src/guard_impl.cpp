@@ -7,14 +7,17 @@
 
 namespace veil {
 
-// 标准证据布局：AntiDebugSnapshot 16 + ModuleTopology 20 + CertificatePin 32。
+// 标准证据布局：AntiDebugSnapshot 16。
 //
 // 这个长度是对外契约。服务端用零基线按同一长度构造 info，因此客户端
 // 改动 provider 顺序或增删 provider 后，服务端必须同步，否则全部客户端
 // 派生分叉。静态断言在编译期锁定，避免改动后静默失配。
-using StandardLayout = evidence::Layout<providers::AntiDebugSnapshot,
-                                        providers::ModuleTopology,
-                                        providers::CertificatePin>;
+//
+// 只有反调试一组。它的每一项在未篡改环境下恒为零，因此零基线成立。
+// 模块拓扑与证书指纹的正常值不恒为零——前者随安装目录与加载顺序变化，
+// 后者在走 TLS 时必然是真实摘要——进入默认布局会让正常客户端与服务端
+// 派生出不同密钥。需要它们的接入方自行装配并在服务端登记布局。
+using StandardLayout = evidence::Layout<providers::AntiDebugSnapshot>;
 
 static_assert(StandardLayout::SIZE == STANDARD_EVIDENCE_SIZE,
               "the standard evidence layout changed; the server must be updated");
@@ -24,12 +27,21 @@ static_assert(StandardLayout::SIZE == STANDARD_EVIDENCE_SIZE,
 // CodeIntegrity 带实例状态，需在采集前完成区域登记，因此它的布局
 // 由调用方自行装配，不在此处固定。这里只锁定长度契约。
 using IntegrityLayout = evidence::Layout<providers::AntiDebugSnapshot,
-                                         providers::ModuleTopology,
-                                         providers::CertificatePin,
                                          providers::CodeIntegrity>;
 
 static_assert(IntegrityLayout::SIZE == INTEGRITY_EVIDENCE_SIZE,
               "the integrity layout changed; the server registry must be updated");
+
+// 组合布局：标准布局加上模块拓扑与证书指纹。正常环境下这两组观测
+// 不保证为零，服务端无法用零基线复现，因此不设默认布局标识。接入方
+// 若确有需要，须自行定义布局并在服务端登记期望值。
+using ExtendedLayout = evidence::Layout<providers::AntiDebugSnapshot,
+                                        providers::ModuleTopology,
+                                        providers::CertificatePin>;
+
+static_assert(ExtendedLayout::SIZE == 68,
+              "the extended layout changed; register it before use");
+
 
 // 静态库形态的实现单元。
 //
@@ -55,11 +67,8 @@ extern "C" bool veil_capture_standard_evidence(std::uint8_t* out,
         return false;
 
     const providers::AntiDebugSnapshot debug_probe;
-    const providers::ModuleTopology topo_probe;
-    const providers::CertificatePin pin_probe;
 
-    if (!StandardLayout::serialize(out, capacity, debug_probe, topo_probe,
-                                   pin_probe))
+    if (!StandardLayout::serialize(out, capacity, debug_probe))
         return false;
 
     *written = StandardLayout::SIZE;
@@ -150,11 +159,9 @@ extern "C" bool veil_capture_integrity_evidence(std::uint8_t* out,
     }
 
     const providers::AntiDebugSnapshot debug_probe;
-    const providers::ModuleTopology topo_probe;
-    const providers::CertificatePin pin_probe;
 
-    if (!IntegrityLayout::serialize(out, capacity, debug_probe, topo_probe,
-                                    pin_probe, integrity_probe))
+    if (!IntegrityLayout::serialize(out, capacity, debug_probe,
+                                    integrity_probe))
         return false;
 
     *written = IntegrityLayout::SIZE;
