@@ -1,7 +1,6 @@
 #pragma once
 
 // 私有项目，保留全部权利。未经许可不得使用、复制、修改或分发。
-// 详见仓库根目录 README.md 的授权一节。
 
 #include "config.hpp"
 #include "detail/common.hpp"
