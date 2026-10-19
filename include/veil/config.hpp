@@ -29,8 +29,8 @@ inline constexpr std::uint64_t BUILD_SEED =
 // 观测槽位上限。区域数、模块数等 provider 都以此为界。
 inline constexpr std::size_t MAX_OBSERVATION_SLOTS = 8;
 
-// 证据 blob 的硬上限。hkdf 的 info 拼接缓冲需同时容纳证据与域字节，
-// 因此该值必须留出余量，不能让 info 触到 hkdf 的截断阈值。
-inline constexpr std::size_t MAX_EVIDENCE_BYTES = 512;
+// 证据 blob 的硬上限。全部 provider 的顺序拼接与域字节都需落在此范围内，
+// Binder 的 info 缓冲因此取该值加一，hkdf 的截断阈值必须再高出一档。
+inline constexpr std::size_t MAX_EVIDENCE_BYTES = 1024;
 
 }  // namespace veil
