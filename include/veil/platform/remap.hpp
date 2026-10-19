@@ -81,10 +81,12 @@ public:
         if (!apply_rip_references())
             return false;
 
-        if (!protect_executable())
+        // 展开信息副本写在代码之后的页内空间，必须在整页改为只读可执行
+        // 之前完成。顺序颠倒会让那次写入触发访问违规。
+        if (!register_unwind(layout))
             return false;
 
-        if (!register_unwind(layout))
+        if (!protect_executable())
             return false;
 
         FlushInstructionCache(GetCurrentProcess(), mapped_, page_size);
@@ -99,37 +101,80 @@ public:
     // 相对原地址的位移。调用方据此把指向原代码的指针换算到新页。
     std::intptr_t delta() const noexcept { return delta_; }
 
-    // 查询某地址所在函数的边界。返回 false 表示该地址不在任何已
-    // 登记的函数内，此时无法确定映射范围，调用方应放弃重映射。
+    // 查询某地址所在函数的边界。
+    //
+    // 返回的区间必须自包含控制流出口。.pdata 的 EndAddress 不满足这一点：
+    // 编译器会把尾部的 ret 合并到下一个函数，此时前一个函数的条目结束于
+    // ret 之前。按该长度复制出的副本执行到末尾会冲进零填充，随即崩溃。
+    // 因此无论边界来自 .pdata 还是解码推导，都要向后延伸到返回指令。
+    //
+    // .pdata 只登记需要展开信息的函数，不抛异常、不调栈检查的叶子函数
+    // 没有条目。这类函数在表里查不到，但同样可以重映射，此时边界完全
+    // 由解码推导。
     static bool function_bounds(const void* module, const void* address,
                                 const void** begin, std::size_t* size) noexcept {
         ImageLayout layout{};
         if (!describe_image(module, &layout))
             return false;
-        if (layout.exception_table.VirtualAddress == 0)
-            return false;
-
-        const auto* table = reinterpret_cast<const RUNTIME_FUNCTION*>(
-            layout.base + layout.exception_table.VirtualAddress);
-        const std::size_t count =
-            layout.exception_table.Size / sizeof(RUNTIME_FUNCTION);
 
         const auto target = reinterpret_cast<std::uintptr_t>(address);
         const auto base = reinterpret_cast<std::uintptr_t>(layout.base);
+        const auto image_end = base + layout.size_of_image;
 
-        for (std::size_t i = 0; i < count; ++i) {
-            const auto function_begin = base + table[i].BeginAddress;
-            const auto function_end = base + table[i].EndAddress;
-            if (target < function_begin || target >= function_end)
-                continue;
+        if (layout.base == nullptr || target < base || target >= image_end)
+            return false;
+        if (!is_executable_address(layout, target))
+            return false;
 
-            if (begin != nullptr)
-                *begin = reinterpret_cast<const void*>(function_begin);
-            if (size != nullptr)
-                *size = function_end - function_begin;
-            return true;
+        // 已知的函数分界，同时充当扫描的硬上限
+        std::uintptr_t start = target;
+        std::uintptr_t limit = image_end;
+
+        if (layout.exception_table.VirtualAddress != 0) {
+            const auto* table = reinterpret_cast<const RUNTIME_FUNCTION*>(
+                layout.base + layout.exception_table.VirtualAddress);
+            const std::size_t count =
+                layout.exception_table.Size / sizeof(RUNTIME_FUNCTION);
+
+            bool inside_entry = false;
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto ent_begin = base + table[i].BeginAddress;
+                const auto ent_end = base + table[i].EndAddress;
+
+                if (target >= ent_begin && target < ent_end) {
+                    start = ent_begin;
+                    limit = ent_end;
+                    inside_entry = true;
+                    break;
+                }
+                if (ent_begin > target && ent_begin < limit)
+                    limit = ent_begin;
+            }
+
+            // 条目命中时，尾合并的 ret 在条目之外，放宽到下一个条目起点。
+            // 下一个起点可能恰好等于 ent_end，因此用 >= 而不是 >。
+            if (inside_entry) {
+                std::uintptr_t next = image_end;
+                for (std::size_t i = 0; i < count; ++i) {
+                    const auto ent_begin = base + table[i].BeginAddress;
+                    if (ent_begin >= limit && ent_begin < next)
+                        next = ent_begin;
+                }
+                limit = next;
+            }
         }
-        return false;
+
+        const std::size_t size_at = scan_to_exit(
+            reinterpret_cast<const std::uint8_t*>(start), target - start,
+            limit - start);
+        if (size_at == 0)
+            return false;
+
+        if (begin != nullptr)
+            *begin = reinterpret_cast<const void*>(start);
+        if (size != nullptr)
+            *size = size_at;
+        return true;
     }
 
     // 按函数边界映射。地址必须落在已登记的函数内。
@@ -161,6 +206,88 @@ public:
     }
 
 private:
+    // 地址是否落在某个带 IMAGE_SCN_MEM_EXECUTE 的段内
+    static bool is_executable_address(const ImageLayout& layout,
+                                      std::uintptr_t address) noexcept {
+        const auto* section = section_table(layout.base);
+        if (section == nullptr)
+            return false;
+
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+            layout.base + reinterpret_cast<const IMAGE_DOS_HEADER*>(
+                               layout.base)->e_lfanew);
+        const std::uintptr_t base =
+            reinterpret_cast<std::uintptr_t>(layout.base);
+
+        for (std::size_t i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+            if ((section[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) == 0)
+                continue;
+            const auto begin = base + section[i].VirtualAddress;
+            const auto end = begin + section[i].Misc.VirtualSize;
+            if (address >= begin && address < end)
+                return true;
+        }
+        return false;
+    }
+
+    // 从 start 逐条解码，返回需要复制的字节数。
+    //
+    // 不能停在第一条 ret。尾合并会让一个函数的短跳转越过自己的 ret
+    // 落到相邻代码块，那里才是真正的出口。只复制到 ret 会让副本里的
+    // 跳转落到零填充上，随即崩溃。
+    //
+    // 因此扫完整个 limit 区间，记录最后一条返回指令的位置与所有分支
+    // 目标的最大值，取两者较大者作为终点。minimum 是必须覆盖的字节数，
+    // 取目标地址相对起点的偏移加一。limit 取下一个已知函数的起点。
+    static std::size_t scan_to_exit(const std::uint8_t* start,
+                                    std::size_t minimum,
+                                    std::size_t limit) noexcept {
+        if (start == nullptr || limit < minimum + 1)
+            return 0;
+
+        std::size_t scanned = 0;
+        std::size_t last_exit = 0;
+        std::size_t max_branch = 0;
+
+        while (scanned < limit) {
+            const std::uint8_t opcode = start[scanned];
+
+            if (opcode == 0xC3 || opcode == 0xCB) {
+                ++scanned;
+                last_exit = scanned;
+                continue;
+            }
+            // int3 填充：函数已结束，后续字节不属于本函数
+            if (opcode == 0xCC)
+                break;
+
+            const std::size_t length = InstructionScanner::instruction_length(
+                start + scanned, limit - scanned);
+            if (length == 0)
+                break;
+
+            std::size_t branch_to = 0;
+            if (InstructionScanner::branch_target(start + scanned, length,
+                                                  &branch_to)) {
+                // branch_target 给出的是相对该指令起点的偏移
+                const std::size_t absolute = scanned + branch_to;
+                if (absolute <= limit && absolute > max_branch)
+                    max_branch = absolute;
+            }
+
+            scanned += length;
+        }
+
+        std::size_t end = last_exit > max_branch ? last_exit : max_branch;
+        if (end < scanned && last_exit == 0)
+            end = scanned;
+
+        if (end < minimum + 1 || end > limit)
+            return 0;
+
+        return end;
+    }
+
     static std::size_t page_span(std::size_t size) noexcept {
         SYSTEM_INFO info{};
         GetSystemInfo(&info);
@@ -327,10 +454,14 @@ private:
 
     // 把原映像中覆盖被映射区间的展开信息登记到新页。
     //
-    // 没有这一步，新页上抛出的异常会让展开器找不到函数边界，
-    // 异常被静默吞掉或直接终止进程。登记用 RtlAddFunctionTable，
-    // 它以模块基址加相对地址描述，因此只需把表项里的 BeginAddress
-    // 与 UnwindData 按位移修正后整块提交。
+    // RtlAddFunctionTable 的 BaseAddress 是新页，表项里的 BeginAddress、
+    // EndAddress 与 UnwindData 全部被解释为相对该基址的偏移。原映像的
+    // .xdata 留在原处，若把它的原 RVA 直接填进去，展开器会到新页的
+    // 对应偏移处读到零填充，解析出无效的展开码后崩溃——即便被调用的
+    // 函数从未抛出异常，返回指令本身也会触发一次展开查询。
+    //
+    // 因此 .xdata 必须复制进新页，UnwindData 改指副本的偏移。副本放在
+    // 被映射代码之后，与新页同基址，RVA 天然成立。
     bool register_unwind(const ImageLayout& layout) noexcept {
         if (layout.exception_table.VirtualAddress == 0 ||
             layout.exception_table.Size < sizeof(RUNTIME_FUNCTION))
@@ -358,6 +489,12 @@ private:
         if (inside == 0)
             return true;
 
+        // .xdata 副本放在被映射代码之后。新页按页对齐分配，函数本体
+        // 通常远小于一页，尾部空间足够；不够时整块拒绝，而不是产出
+        // 一份展开器无法解析的表。
+        const std::size_t xdata_base = align_up(region_size_, 4);
+        std::size_t xdata_used = 0;
+
         auto* entries = static_cast<RUNTIME_FUNCTION*>(
             VirtualAlloc(nullptr, inside * sizeof(RUNTIME_FUNCTION),
                          MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
@@ -381,15 +518,24 @@ private:
             ++cursor;
         }
 
-        // UnwindData 指向 .pdata 之外时按位移修正；指向映像内部时
-        // 该地址仍是有效的原映像地址，无需修正。两种情形都以
-        // 「是否落在被映射区间」为判据。
+        // 复制每个表项引用到的展开数据，并把 UnwindData 改指副本
         for (std::size_t i = 0; i < cursor; ++i) {
-            const auto unwind = reinterpret_cast<std::uintptr_t>(layout.base) +
-                                (entries[i].UnwindData);
-            if (unwind >= region_begin && unwind < region_end)
-                entries[i].UnwindData = static_cast<DWORD>(
-                    unwind - region_begin);
+            const std::size_t bytes =
+                unwind_info_size(entries[i].UnwindData, layout);
+            if (bytes == 0)
+                continue;
+
+            const std::size_t at = xdata_base + xdata_used;
+            if (at + bytes > mapped_size_)
+                break;  // 新页放不下，该条目不登记展开信息
+
+            const auto* original = reinterpret_cast<const std::uint8_t*>(
+                layout.base + entries[i].UnwindData);
+            for (std::size_t k = 0; k < bytes; ++k)
+                mapped_[at + k] = original[k];
+
+            entries[i].UnwindData = static_cast<DWORD>(at);
+            xdata_used += bytes;
         }
 
         if (!RtlAddFunctionTable(entries, static_cast<DWORD>(cursor),
@@ -401,6 +547,47 @@ private:
         unwind_ = entries;
         unwind_count_ = cursor;
         return true;
+    }
+
+    static std::size_t align_up(std::size_t value, std::size_t to) noexcept {
+        return ((value + to - 1) / to) * to;
+    }
+
+    // UNWIND_INFO 是变长结构：头部四字节之后跟 CountOfCodes 个两字节的
+    // 展开码，再按需跟对齐填充、异常处理函数指针与链式条目。
+    // 只算出需要复制的字节数，不做语义解析。
+    //
+    // 边界全部用整数比较。UnwindData 来自映像数据，被改写后会变成
+    // 任意值，用指针算术判断越界本身就是未定义行为。
+    static std::size_t unwind_info_size(std::uint32_t unwind_rva,
+                                        const ImageLayout& layout) noexcept {
+        const auto base = reinterpret_cast<std::uintptr_t>(layout.base);
+        const auto end = base + layout.size_of_image;
+        const auto at = base + unwind_rva;
+
+        if (at < base || at + 4 > end)
+            return 0;
+
+        const auto* info = reinterpret_cast<const std::uint8_t*>(at);
+
+        const std::uint8_t version = info[0] & 0x07;
+        const std::uint8_t flags = static_cast<std::uint8_t>(info[0] >> 3);
+        const std::uint8_t codes = info[2];
+
+        if (version != 1)
+            return 0;
+
+        std::size_t size = 4 + static_cast<std::size_t>(codes) * 2;
+
+        if ((flags & 0x04) != 0)
+            size += 12;
+        else if ((flags & 0x03) != 0)
+            size = align_up(size, 4) + 4;
+
+        if (size > layout.size_of_image || at + size > end)
+            return 0;
+
+        return size;
     }
 
     std::uint8_t* mapped_ = nullptr;

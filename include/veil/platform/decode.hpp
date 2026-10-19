@@ -54,6 +54,67 @@ public:
         return cursor;
     }
 
+    // 单条指令的长度。返回 0 表示无法解码。
+    //
+    // 供需要在指令边界上步进的调用方使用：.pdata 缺失时推导函数边界
+    // 必须逐条前进，不能按字节扫描，否则会把立即数里的 0xC3 当成返回。
+    static std::size_t instruction_length(const std::uint8_t* code,
+                                          std::size_t size) noexcept {
+        if (code == nullptr || size == 0)
+            return 0;
+        return decode(code, size).length;
+    }
+
+    // 该指令若是相对跳转或相对调用，输出其目标相对指令起点的偏移。
+    // 返回 false 表示不是相对分支，或位移超出可解码范围。
+    static bool branch_target(const std::uint8_t* code, std::size_t length,
+                              std::size_t* out) noexcept {
+        if (code == nullptr || out == nullptr)
+            return false;
+
+        std::size_t cursor = 0;
+        while (cursor < length && is_prefix(code[cursor]))
+            ++cursor;
+        if (cursor < length && (code[cursor] & 0xF0) == 0x40)
+            ++cursor;
+        if (cursor >= length)
+            return false;
+
+        const std::uint8_t opcode = code[cursor++];
+
+        if (opcode == 0xE8 || opcode == 0xE9) {
+            if (cursor + 4 > length)
+                return false;
+            std::int32_t disp = 0;
+            for (std::size_t i = 0; i < 4; ++i)
+                disp |= static_cast<std::int32_t>(code[cursor + i]) << (i * 8);
+            const std::int64_t target =
+                static_cast<std::int64_t>(cursor + 4) + disp;
+            if (target < 0)
+                return false;
+            *out = static_cast<std::size_t>(target);
+            return true;
+        }
+
+        const bool short_jump =
+            (opcode >= 0x70 && opcode <= 0x7F) || opcode == 0xEB ||
+            opcode == 0xE0 || opcode == 0xE1 || opcode == 0xE2 ||
+            opcode == 0xE3;
+        if (short_jump) {
+            if (cursor + 1 > length)
+                return false;
+            const std::int8_t disp = static_cast<std::int8_t>(code[cursor]);
+            const std::int64_t target =
+                static_cast<std::int64_t>(cursor + 1) + disp;
+            if (target < 0)
+                return false;
+            *out = static_cast<std::size_t>(target);
+            return true;
+        }
+
+        return false;
+    }
+
 private:
     struct Decoded {
         std::size_t length = 0;
@@ -83,10 +144,15 @@ private:
 
     // 判断该 opcode 是否携带 ModRM 字节。这是定位 RIP 相对寻址的
     // 前提：只有带 ModRM 的指令才可能编码 RIP 相对操作数。
+    //
+    // 条件短跳转是 70..7F 一整段，漏掉其中任意一个都会让紧随其后的
+    // 位移字节被当作 ModRM 解析。5 号 rm 会被误判成 RIP 相对，于是
+    // 指令流里的任意三个字节被当成位移改写，副本随即变成无效代码。
     static bool has_modrm(std::uint8_t opcode) noexcept {
         if (opcode >= 0x40 && opcode <= 0x4F) return false;
         if (opcode >= 0x50 && opcode <= 0x5F) return false;
         if (opcode >= 0xB0 && opcode <= 0xBF) return false;
+        if (opcode >= 0x70 && opcode <= 0x7F) return false;
 
         switch (opcode) {
             case 0x90: case 0xC3: case 0xC9: case 0xCC: case 0xCE:
@@ -215,6 +281,7 @@ private:
                                         Decoded result) noexcept {
         (void)code;
         std::size_t trailing = 0;
+        bool rel32 = false;
 
         if (opcode >= 0xB8 && opcode <= 0xBF)
             trailing = 4;
@@ -222,9 +289,12 @@ private:
             trailing = 1;
         else if (opcode >= 0x70 && opcode <= 0x7F)
             trailing = 1;
-        else if (opcode == 0xE8 || opcode == 0xE9)
+        else if (opcode == 0xE8 || opcode == 0xE9) {
             trailing = 4;
-        else if (opcode == 0xEB || opcode == 0xE0 || opcode == 0xE1 ||
+            // 相对调用与相对跳转。重映射后这些指令仍相对新地址计算，
+            // 目标会偏移 delta，必须与 RIP 相对数据引用一样修正。
+            rel32 = true;
+        } else if (opcode == 0xEB || opcode == 0xE0 || opcode == 0xE1 ||
                  opcode == 0xE2 || opcode == 0xE3)
             trailing = 1;
         else if (opcode == 0xC2 || opcode == 0xCA)
@@ -240,6 +310,17 @@ private:
 
         if (cursor + trailing > size)
             return Decoded{};
+
+        if (rel32) {
+            std::int32_t disp = 0;
+            for (std::size_t i = 0; i < 4; ++i)
+                disp |= static_cast<std::int32_t>(code[cursor + i]) << (i * 8);
+
+            result.disp_offset = cursor;
+            result.has_rip_reference = true;
+            result.rip_target_offset =
+                static_cast<std::int64_t>(cursor + 4) + disp;
+        }
 
         result.length = cursor + trailing;
         return result;

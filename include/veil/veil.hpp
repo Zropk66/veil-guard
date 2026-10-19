@@ -28,7 +28,6 @@
 #include "evidence/layout.hpp"
 #include "evidence/binder.hpp"
 #include "license/payload.hpp"
-#include "license/envelope.hpp"
 #include "license/signed_envelope.hpp"
 #include "guard.hpp"
 

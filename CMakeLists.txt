@@ -110,7 +110,7 @@ set(VEIL_TEST_TARGETS
     sha256_test hmac_hkdf_test aes_test aes_gcm_test ed25519_test
     syscall_test peb_test image_file_test scan_test image_map_test remap_test
     anti_debug_test code_integrity_test module_topo_test
-    layout_test binder_test zero_baseline_test envelope_test vectors_test
+    layout_test binder_test zero_baseline_test
     guard_test tls_client_test tls_live_test spki_test umbrella_test
     json_scan_test json_vectors_test signed_envelope_test veil_vectors_test
     veil_envelope_test evidence_contract_test)

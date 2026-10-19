@@ -7,4 +7,3 @@ out/
 *.exe
 *.lib
 temp.obj
-tests/vectors.json

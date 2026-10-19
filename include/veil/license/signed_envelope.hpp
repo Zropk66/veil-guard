@@ -5,12 +5,14 @@
 #include "../crypto/ed25519.hpp"
 #include "../detail/common.hpp"
 #include "../evidence/binder.hpp"
-#include "envelope.hpp"
 
 #include <cstddef>
 #include <cstdint>
 
 namespace veil::license {
+
+// 机器标识上限。超出显式失败，不截断。
+inline constexpr std::size_t MAX_MACHINE_ID = 127;
 
 // 签名信封。
 //
