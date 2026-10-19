@@ -84,7 +84,9 @@ if(VEIL_BUILD_TESTS)
         endif()
         add_executable(${test_name} tests/${test_name}.cpp)
         target_link_libraries(${test_name} PRIVATE veil::header_only)
-        add_test(NAME ${test_name} COMMAND ${test_name})
+        # 夹具测试需要从仓库根读取跨实现向量
+        add_test(NAME ${test_name} COMMAND ${test_name}
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     endforeach()
 endif()
 
