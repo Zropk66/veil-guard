@@ -86,7 +86,8 @@ endif()
 if(VEIL_BUILD_STATIC)
     add_library(veil_static STATIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src/probe_pin.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/guard_impl.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/guard_impl.cpp
+        $<TARGET_OBJECTS:veil_syscall>)
     add_library(veil::static ALIAS veil_static)
     target_include_directories(veil_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_compile_definitions(veil_static PUBLIC
@@ -127,6 +128,16 @@ if(VEIL_BUILD_TESTS)
         add_test(NAME ${test_name} COMMAND ${test_name}
                  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     endforeach()
+
+    # 静态库形态的测试单独建 target：它必须链接 veil::static，
+    # 而不是走 header-only 的接口目标。
+    if(VEIL_BUILD_STATIC AND EXISTS
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/static_api_test.cpp)
+        add_executable(static_api_test tests/static_api_test.cpp)
+        target_link_libraries(static_api_test PRIVATE veil::static)
+        add_test(NAME static_api_test COMMAND static_api_test
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
 endif()
 
 # 发版前必须确认全部测试源已就位，避免缺项被静默跳过。
