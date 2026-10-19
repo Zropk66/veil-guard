@@ -3,6 +3,7 @@
 #include "../config.hpp"
 #include "../detail/observe.hpp"
 #include "../platform/peb.hpp"
+#include "../platform/scan.hpp"
 #include "../platform/syscall.hpp"
 
 #include <cstddef>
@@ -25,7 +26,7 @@ struct AntiDebugSnapshot {
     std::uint8_t reserved0{};
     std::uint8_t reserved1{};
     std::uint32_t nt_global_flag{};
-    std::uint32_t veh_foreign_handlers{};
+    std::uint32_t foreign_executable_pages{};
     std::uint32_t page_guard_events{};
 
     static constexpr std::size_t OBSERVATION_SIZE = 16;
@@ -46,6 +47,16 @@ struct AntiDebugSnapshot {
         }
 
         snapshot.hardware_breakpoints = count_hardware_breakpoints();
+
+        // 注入代码最终必须落在私有可执行页上，调试器则会在代码页挂
+        // PAGE_GUARD。两者在未篡改环境下恒为零，因此可以直接作为
+        // 派生的 info，不需要服务端登记期望值。
+        platform::ForeignCodePages pages{};
+        platform::scan_code_pages(&pages);
+
+        snapshot.foreign_executable_pages = pages.foreign_count;
+        snapshot.page_guard_events = pages.guarded_count;
+
         return snapshot;
     }
 

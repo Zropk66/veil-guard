@@ -78,9 +78,10 @@ option(VEIL_BUILD_TESTS "Build veil tests" OFF)
 
 set(VEIL_TEST_TARGETS
     sha256_test hmac_hkdf_test aes_test aes_gcm_test ed25519_test
-    syscall_test peb_test image_file_test
+    syscall_test peb_test image_file_test scan_test
     anti_debug_test code_integrity_test module_topo_test
-    layout_test binder_test zero_baseline_test envelope_test vectors_test)
+    layout_test binder_test zero_baseline_test envelope_test vectors_test
+    guard_test)
 
 if(VEIL_BUILD_TESTS)
     enable_testing()

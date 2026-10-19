@@ -27,15 +27,14 @@ int main() {
                  "same evidence derives identical key");
 
     // 任一字节变化必须分叉
-    for (std::size_t byte = 0; byte < sizeof(evidence); ++byte) {
+    {
         std::uint8_t tampered[16]{};
-        tampered[byte] = 0x01;
+        tampered[0] = 0x01;
         std::uint8_t key_c[32];
         evidence::Binder::derive(card_key, sizeof(card_key) - 1, nonce, sizeof(nonce),
                                  tampered, sizeof(tampered), 0x01, key_c);
         test::expect(detail::constant_time_compare(key_a, key_c, 32) == 0,
                      "altered evidence changes derived key");
-        break;
     }
 
     // 域字节隔离
